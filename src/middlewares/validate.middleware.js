@@ -27,7 +27,7 @@ const validate = (schema) => (req, res, next) => {
   });
 
   if (errors.length > 0) {
-    return next(new ApiError(400, 'Validasi gagal', errors));
+    return next(new ApiError(400, 'Validation failed', { code: 'VALIDATION_ERROR', details: errors }));
   }
 
   return next();

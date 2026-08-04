@@ -52,7 +52,7 @@ app.use(
     max: rateLimitConfig.max,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { success: false, message: 'Terlalu banyak request, coba lagi nanti' },
+    message: { success: false, message: 'Too many requests, please try again later', code: 'RATE_LIMITED' },
   })
 );
 
