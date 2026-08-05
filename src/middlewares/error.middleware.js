@@ -45,7 +45,14 @@ const errorHandler = (err, req, res, next) => {
   res.status(error.statusCode || 500).json({
     success: false,
     message: error.message,
-    code: error.code || 'INTERNAL_ERROR',
+    // FIX: previously fell back to 'INTERNAL_ERROR' for ANY error missing an
+    // explicit `code`, regardless of statusCode — so a well-formed 409/404
+    // ApiError with no `code` set (e.g. reverseDeduct's "reference not found")
+    // was mislabeled as an internal/500-class error in the response body,
+    // even though the actual HTTP status was already correct.
+    // Only unclassified 5xx errors should read as INTERNAL_ERROR; anything
+    // 4xx without an explicit code is just a generic client-facing ERROR.
+    code: error.code || ((error.statusCode || 500) >= 500 ? 'INTERNAL_ERROR' : 'ERROR'),
     details: error.details || undefined,
     // Stack trace hanya muncul di development, jangan bocor ke production.
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,

@@ -1,8 +1,8 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const User = require('../models/user.model');
-const RefreshToken = require('../models/refreshToken.model');
+const User = require('../models/auth/user.model');
+const RefreshToken = require('../models/auth/refreshToken.model');
 const ApiError = require('../utils/ApiError');
 const { hashToken } = require('../utils/hashToken');
 const { jwt: jwtConfig, otp: otpConfig, singleSessionOnly } = require('../config/env');

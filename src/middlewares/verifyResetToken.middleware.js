@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const ApiError = require('../utils/ApiError');
 const asyncHandler = require('../utils/asyncHandler');
 const { jwt: jwtConfig } = require('../config/env');
-const User = require('../models/user.model');
+const User = require('../models/auth/user.model');
 
 /**
  * Verifikasi resetToken yang dikirim di body request (bukan header Bearer).
@@ -34,7 +34,9 @@ const verifyResetToken = asyncHandler(async (req, res, next) => {
     throw new ApiError(401, 'Token is invalid for this action', { code: 'RESET_TOKEN_INVALID' });
   }
 
-  const user = await User.findById(decoded.sub).select('+resetPasswordNonce +tokenVersion +password');
+  const user = await User.findById(decoded.sub).select(
+    '+resetPasswordNonce +tokenVersion +password'
+  );
   if (!user || !user.resetPasswordNonce || user.resetPasswordNonce !== decoded.nonce) {
     throw new ApiError(401, 'Reset token has been used or is invalid', {
       code: 'RESET_TOKEN_INVALID',
