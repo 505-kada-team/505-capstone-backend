@@ -5,7 +5,9 @@ jest.mock('../src/utils/mailer', () => ({
 
 jest.mock('express-rate-limit', () => {
   return function rateLimit() {
-    return function rateLimitMiddleware(req, res, next) { return next(); };
+    return function rateLimitMiddleware(req, res, next) {
+      return next();
+    };
   };
 });
 
@@ -44,8 +46,8 @@ beforeAll(async () => {
   process.env.MONGO_URI = mongoServer.getUri();
 
   await mongoose.connect(process.env.MONGO_URI);
-  User = require('../src/models/user.model');
-  RefreshToken = require('../src/models/refreshToken.model');
+  User = require('../src/models/auth/user.model');
+  RefreshToken = require('../src/models/auth/refreshToken.model');
   app = require('../src/app');
 });
 
@@ -63,12 +65,14 @@ beforeEach(async () => {
 const BASE = '/api/v1/auth';
 
 const registerUser = (overrides = {}) =>
-  request(app).post(`${BASE}/register`).send({
-    name: 'Test User',
-    email: 'test@example.com',
-    password: 'password123',
-    ...overrides,
-  });
+  request(app)
+    .post(`${BASE}/register`)
+    .send({
+      name: 'Test User',
+      email: 'test@example.com',
+      password: 'password123',
+      ...overrides,
+    });
 
 const getLatestOtp = () => {
   const call = sendOtpEmail.mock.calls[sendOtpEmail.mock.calls.length - 1];
@@ -420,9 +424,7 @@ describe('Forgot password flow', () => {
   describe('POST /auth/forgot-password/verify-code', () => {
     it('returns 200 with resetToken for valid code', async () => {
       await registerUser();
-      await request(app)
-        .post(`${BASE}/forgot-password`)
-        .send({ email: 'test@example.com' });
+      await request(app).post(`${BASE}/forgot-password`).send({ email: 'test@example.com' });
 
       const code = getLatestOtp();
       const res = await request(app)
@@ -435,9 +437,7 @@ describe('Forgot password flow', () => {
 
     it('returns 400 OTP_INVALID for wrong code', async () => {
       await registerUser();
-      await request(app)
-        .post(`${BASE}/forgot-password`)
-        .send({ email: 'test@example.com' });
+      await request(app).post(`${BASE}/forgot-password`).send({ email: 'test@example.com' });
 
       const res = await request(app)
         .post(`${BASE}/forgot-password/verify-code`)
@@ -452,9 +452,7 @@ describe('Forgot password flow', () => {
     it('resets password with valid resetToken', async () => {
       await registerUser();
       await User.findOneAndUpdate({ email: 'test@example.com' }, { isEmailVerified: true });
-      await request(app)
-        .post(`${BASE}/forgot-password`)
-        .send({ email: 'test@example.com' });
+      await request(app).post(`${BASE}/forgot-password`).send({ email: 'test@example.com' });
 
       const code = getLatestOtp();
       const verifyRes = await request(app)
@@ -564,9 +562,7 @@ describe('GET /auth/me', () => {
   });
 
   it('returns 401 for invalid token', async () => {
-    const res = await request(app)
-      .get(`${BASE}/me`)
-      .set('Authorization', 'Bearer invalid-token');
+    const res = await request(app).get(`${BASE}/me`).set('Authorization', 'Bearer invalid-token');
 
     expect(res.status).toBe(401);
   });
@@ -584,9 +580,7 @@ describe('GET /auth/me', () => {
     // Simulate tokenVersion bump
     await User.findOneAndUpdate({ email: 'test@example.com' }, { $inc: { tokenVersion: 1 } });
 
-    const res = await request(app)
-      .get(`${BASE}/me`)
-      .set('Authorization', `Bearer ${token}`);
+    const res = await request(app).get(`${BASE}/me`).set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(401);
   });
@@ -634,9 +628,7 @@ describe('Single session enforcement', () => {
       .send({ email: 'test@example.com', password: 'password123' });
 
     // First token should be dead
-    const res = await request(app)
-      .get(`${BASE}/me`)
-      .set('Authorization', `Bearer ${token1}`);
+    const res = await request(app).get(`${BASE}/me`).set('Authorization', `Bearer ${token1}`);
 
     expect(res.status).toBe(401);
   });
