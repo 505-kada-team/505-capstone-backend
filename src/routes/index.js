@@ -9,7 +9,7 @@ const router = express.Router();
 router.use('/auth', authRoutes);
 router.use('/', inventoryRoutes);
 router.use('/menu', menuRoutes);
-router.use('/plans', planRoutes);
+router.use('/plan', planRoutes);
 
 router.get('/health', (req, res) => res.status(200).json({ success: true, message: 'OK' }));
 
