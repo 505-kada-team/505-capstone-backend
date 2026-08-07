@@ -1,9 +1,5 @@
 const Menu = require('../models/menu/menu.model');
 const Inventory = require('../models/inventory/inventory.model');
-// TODO: point this at your actual Production Plan model/path once that
-// module exists. Assumed shape: { status, menus: [{ menuId }],
-// checkResultStale: Boolean, staleReason: String } — adjust field names
-// below (flagDraftPlansStale) if yours differ.
 const ProductionPlan = require('../models/plan/productionPlan.model');
 const ApiError = require('../utils/ApiError');
 
@@ -256,6 +252,54 @@ async function getMenuById(id) {
   return result;
 }
 
+/**
+ * NEW — batch-fetch untuk Production Plan (A1/A3/A4/A5/A6).
+ *
+ * Dipakai tiap kali Plan perlu resep+cost breakdown beberapa Menu sekaligus
+ * (agregasi kebutuhan bahan lintas menu, breakdown ingredientsDetail per
+ * menu, defense-in-depth validasi status Menu saat approve). Reuse
+ * `buildCostBreakdown` yang sama dengan getMenuById/getMenus — TIDAK ada
+ * metodologi cost kedua yang berjalan paralel (lihat RFC v3 Production
+ * Plan §4.5, alasan kenapa ini penting).
+ *
+ * Sengaja TIDAK memfilter status: 'active' di query — caller (Plan) butuh
+ * tahu status apa adanya (termasuk 'deleted') untuk menentukan menuId mana
+ * yang tidak valid/sudah diarsipkan. menuId yang sama sekali tidak
+ * ditemukan di DB tidak akan muncul di array hasil — caller yang membedakan
+ * "missing" vs "status non-active".
+ *
+ * @param {Array<string|ObjectId>} menuIds
+ * @returns {Promise<Array<{
+ *   _id, name, status, sellingPrice,
+ *   ingredients: Array<{ inventoryId, nameInventory, quantityNeeded, currentCostPerUnit, subtotalCost }>,
+ *   currentCostEstimate, marginEstimate, marginPercentage, costComplete, warning
+ * }>>}
+ */
+async function getMenusByIds(menuIds) {
+  const uniqueIds = [...new Set(menuIds.map((id) => String(id)))];
+  if (uniqueIds.length === 0) return [];
+
+  const menus = await Menu.find({ _id: { $in: uniqueIds } });
+
+  return Promise.all(
+    menus.map(async (menu) => {
+      const breakdown = await buildCostBreakdown(menu.ingredients, menu.sellingPrice);
+      return {
+        _id: menu._id,
+        name: menu.name,
+        status: menu.status,
+        sellingPrice: menu.sellingPrice,
+        ingredients: breakdown.ingredients,
+        currentCostEstimate: breakdown.currentCostEstimate,
+        marginEstimate: breakdown.marginEstimate,
+        marginPercentage: breakdown.marginPercentage,
+        costComplete: breakdown.costComplete,
+        warning: breakdown.warning,
+      };
+    })
+  );
+}
+
 async function updateMenu(id, data) {
   const menu = await Menu.findOne({ _id: id, status: 'active' });
   if (!menu) throw new ApiError(404, 'Menu tidak ditemukan');
@@ -340,6 +384,7 @@ module.exports = {
   createMenu,
   getMenus,
   getMenuById,
+  getMenusByIds,
   updateMenu,
   deleteMenu,
   getMenuDropdown,

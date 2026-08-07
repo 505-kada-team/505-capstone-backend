@@ -3,6 +3,7 @@ const Inventory = require('../models/inventory/inventory.model');
 const SubInventory = require('../models/inventory/subInventory.model');
 const HistorySubInventory = require('../models/inventory/historySubInventory.model');
 const HistoryUsage = require('../models/inventory/historyUsage.model');
+const ProductionPlan = require('../models/plan/productionPlan.model');
 const ApiError = require('../utils/ApiError');
 const { deriveItemCode, generateBatchCode } = require('../utils/batchCode');
 const { planFefoDeduction, daysUntilExpiry } = require('../utils/fefo');
@@ -57,8 +58,23 @@ async function lazyExpireBatches(inventoryId, session) {
 // call sites (delete inventory / delete batch) don't need to change later.
 // eslint-disable-next-line no-unused-vars
 async function propagateStale(inventoryId, subInventoryId, staleReason, session) {
-  // TODO(production-plan): flip checkResultStale=true on any Plan draft
-  // whose cached check-availability result referenced this Inventory/batch.
+  const filter = {
+    status: 'draft',
+    'checkResult.inventoryId': inventoryId,
+  };
+
+  // batch_removed harus match subInventoryId spesifik di dalam eligible
+  // batches, bukan sekadar inventoryId — supaya draft yang FEFO-plan-nya
+  // tidak menyentuh batch yang dihapus tidak ikut ditandai stale.
+  if (staleReason === 'batch_removed' && subInventoryId) {
+    filter['checkResult.eligibleBatches.subInventoryId'] = subInventoryId;
+  }
+
+  await ProductionPlan.updateMany(
+    filter,
+    { $set: { checkResultStale: true, staleReason } },
+    { session }
+  );
 }
 
 function toBatchDTO(sub) {
@@ -183,7 +199,7 @@ async function deleteInventory(id) {
 
       inventory.status = 'deleted';
       await inventory.save({ session });
-      await propagateStale(id, null, 'inventory_deleted', session);
+      await propagateStale(id, null, 'inventory_archived', session);
       result = inventory;
     });
     return result;
@@ -300,7 +316,7 @@ async function deleteSubInventory(id) {
       batch.status = 'deleted';
       await batch.save({ session });
       await recomputeInventoryCache(batch.inventoryId, session);
-      await propagateStale(batch.inventoryId, id, 'batch_deleted', session);
+      await propagateStale(batch.inventoryId, id, 'batch_removed', session);
       result = batch;
     });
     return result;
@@ -336,7 +352,17 @@ async function listHistorySubInventory(query) {
 // see utils/fefo.js — so their logic can never diverge (§4).
 // ---------------------------------------------------------------------------
 
-async function checkAvailability({ items, availableUntil }) {
+async function checkAvailability(params) {
+  let items, availableUntil;
+
+  if (params.items) {
+    items = params.items;
+    availableUntil = params.availableUntil;
+  } else {
+    items = [{ inventoryId: params.inventoryId, amountNeeded: params.quantityNeeded }];
+    availableUntil = params.availableUntil;
+  }
+
   const results = [];
   for (const { inventoryId, amountNeeded } of items) {
     const inventory = await Inventory.findOne({ _id: inventoryId, status: 'active' });
@@ -354,11 +380,21 @@ async function checkAvailability({ items, availableUntil }) {
     results.push({
       inventoryId,
       nameInventory: inventory.name,
-      amountNeeded,
+      quantityNeeded: amountNeeded, // ⬅️ disamakan nama dgn checkResultSchema
       sufficient,
+      // ⬅️ field baru — total stok aktif SAAT INI, independen dari amountNeeded.
+      // Ini yang tadinya saya approksimasi, sekarang dihitung asli dari batches
+      // yang sudah kita fetch, jadi gratis (gak query tambahan).
+      availableQuantity: batches.reduce((sum, b) => sum + b.quantity, 0),
       shortfall,
       hasUnsafeBatch,
-      batches: plan,
+      // ⬅️ dipetakan ke bentuk eligibleBatchSchema, bukan plan mentah
+      eligibleBatches: plan.map((step) => ({
+        subInventoryId: step.subInventoryId,
+        quantityTaken: step.take,
+        expired: step.expired,
+        batchSafetyStatus: step.batchSafetyStatus,
+      })),
     });
   }
 
@@ -368,7 +404,6 @@ async function checkAvailability({ items, availableUntil }) {
     overallHasUnsafeBatch: results.some((r) => r.hasUnsafeBatch),
   };
 }
-
 async function deduct({ items, availableUntil, reference }) {
   const session = await mongoose.startSession();
   try {
@@ -454,7 +489,17 @@ async function deduct({ items, availableUntil, reference }) {
         }
 
         touchedInventoryIds.add(String(inventoryId));
-        perItemResult.push({ inventoryId, hasUnsafeBatch, batches: plan });
+        perItemResult.push({
+          inventoryId,
+          nameInventory: inventory.name,
+          quantityNeeded: amountNeeded,
+          batches: plan.map((step) => ({
+            subInventoryId: step.subInventoryId,
+            quantityUsed: step.take,
+            costPriceUsed: step.costPrices,
+            batchSafetyStatus: step.batchSafetyStatus,
+          })),
+        });
       }
 
       const created = await HistoryUsage.insertMany(usageRows, { session });
