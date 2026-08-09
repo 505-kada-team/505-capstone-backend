@@ -3,16 +3,20 @@ const ApiResponse = require('../utils/ApiResponse');
 const planReportService = require('../services/report.service');
 
 const createReport = asyncHandler(async (req, res) => {
-  // reportedBy/reportedByRole diambil dari req.user (hasil authenticate()),
-  // bukan dari body -- pola sama dengan cashierName di Selling.
+  // reportedBy & reportedByRole SENGAJA diambil dari req.user, BUKAN body
+  // -- lihat planReport.validation.js. reportedByRole dipetakan dari
+  // req.user.role: hanya 'admin' yang memicu auto-approve C1, role lain
+  // (termasuk 'cashier' atau apapun yang bukan admin) dianggap 'cashier'
+  // untuk keperluan enum reportedByRole di PlanReport (RFC hanya kenal 2
+  // nilai: cashier/admin).
   const report = await planReportService.createReport({
     ...req.body,
     reportedBy: req.user.name,
-    reportedByRole: req.user.role,
+    reportedByRole: req.user.role === 'admin' ? 'admin' : 'cashier',
   });
 
   const message =
-    report.reportedByRole === 'admin'
+    report.status === 'approved'
       ? 'Laporan tercatat dan otomatis disetujui'
       : 'Laporan berhasil dikirim, menunggu review admin';
 
@@ -25,13 +29,13 @@ const listReports = asyncHandler(async (req, res) => {
 });
 
 const reviewReport = asyncHandler(async (req, res) => {
-  const report = await planReportService.reviewReport(req.params.id, {
+  const result = await planReportService.reviewReport(req.params.id, {
     ...req.body,
     reviewedBy: req.user.name,
   });
 
-  const message = report.status === 'approved' ? 'Laporan disetujui' : 'Laporan ditolak';
-  return new ApiResponse(200, report, message).send(res);
+  const message = result.status === 'approved' ? 'Laporan disetujui' : 'Laporan ditolak';
+  return new ApiResponse(200, result, message).send(res);
 });
 
 const addInventoryReplacement = asyncHandler(async (req, res) => {
@@ -39,6 +43,7 @@ const addInventoryReplacement = asyncHandler(async (req, res) => {
     ...req.body,
     replacedBy: req.user.name,
   });
+
   return new ApiResponse(
     200,
     result,

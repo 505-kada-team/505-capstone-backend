@@ -9,13 +9,21 @@ const createReport = {
     planId: objectId.required(),
     category: Joi.string().valid('ingredient', 'menu').required(),
     refId: objectId.required(),
-    quantityLost: Joi.number().min(0).required(),
+    // quantityLost TIDAK dipaksa integer -- kategori ingredient bisa
+    // pecahan (mis. 200.5 gram), kategori menu logisnya bulat tapi tidak
+    // ada aturan tegas dari RFC. Dibedakan lewat .when() supaya category:
+    // menu tetap dijaga bulat tanpa mengunci ingredient.
+    quantityLost: Joi.number()
+      .positive()
+      .required()
+      .when('category', { is: 'menu', then: Joi.number().integer() }),
     incidentAt: Joi.date().iso().required(),
-    reason: Joi.string().trim().max(500).required(),
-    // reportedBy/reportedByRole SENGAJA TIDAK ADA di sini -- diambil
-    // controller dari req.user (hasil authenticate()), pola sama persis
-    // dengan cashierName di Selling. stripUnknown: true akan membuang
-    // diam-diam kalau FE masih mengirimnya di body.
+    reason: Joi.string().trim().min(1).max(500).required(),
+    // reportedBy & reportedByRole SENGAJA TIDAK ADA di sini -- diambil
+    // server-side dari req.user (auth), bukan input klien. Perluasan dari
+    // keputusan cashierName di Selling (#12): jangan percaya klien
+    // menentukan role sendiri (implikasi keamanan -- auto-approve C1
+    // tergantung reportedByRole).
   }),
 };
 
@@ -33,7 +41,7 @@ const reviewReport = {
   }),
   body: Joi.object({
     decision: Joi.string().valid('approved', 'rejected').required(),
-    adminNote: Joi.string().trim().max(500).allow(null, '').default(null),
+    adminNote: Joi.string().trim().max(500).allow(''),
   }),
 };
 
@@ -42,9 +50,11 @@ const addInventoryReplacement = {
     id: objectId.required(),
   }),
   body: Joi.object({
-    replacementQuantity: Joi.number().min(0),
+    // Positive, bukan integer -- replacementQuantity bahan baku bisa
+    // pecahan (gram/kg), sama seperti quantityLost kategori ingredient.
+    replacementQuantity: Joi.number().positive(),
     availableUntil: Joi.date().iso(),
-    varianceNote: Joi.string().trim().max(500).allow(null, '').default(null),
+    varianceNote: Joi.string().trim().max(500).allow(null, ''),
   }),
 };
 

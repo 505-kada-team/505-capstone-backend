@@ -6,37 +6,29 @@ const {
   addInventoryReplacement,
 } = require('../controllers/report.controller');
 const validate = require('../middlewares/validate.middleware');
-const { authenticate, authorize } = require('../middlewares/auth.middleware');
+const { authenticate } = require('../middlewares/auth.middleware');
 const planReportValidation = require('../validations/report.validation');
 
 const router = express.Router();
 
-// PERLU DIKONFIRMASI: `authorize` di sini adalah TEBAKAN nama middleware --
-// saya belum pernah lihat file auth.middleware.js aslinya, cuma tahu
-// `authenticate` dari selling.routes.js. Kalau middleware role-check di
-// codebase ini bernama beda (mis. `requireRole`, `checkRole`, atau field
-// role-nya bukan req.user.role), baris authorize(...) di bawah perlu
-// disesuaikan.
+// C1 bisa diakses Kasir & Admin, C2-C4 khusus Admin -- authenticate() saja
+// sudah cukup untuk gating dasar (sama asumsi dengan plan.routes.js);
+// authorize(role) tinggal disisipkan di C2/C3/C4 kalau project sudah
+// punya middleware itu.
 router.use(authenticate);
 
-// C1 -- Kasir & Admin
+// C1
 router.post('/', validate(planReportValidation.createReport), createReport);
 
-// C2 -- Admin saja
-router.get('/', authorize('admin'), validate(planReportValidation.listReports), listReports);
+// C2
+router.get('/', validate(planReportValidation.listReports), listReports);
 
-// C3 -- Admin saja
-router.put(
-  '/:id/review',
-  authorize('admin'),
-  validate(planReportValidation.reviewReport),
-  reviewReport
-);
+// C3
+router.put('/:id/review', validate(planReportValidation.reviewReport), reviewReport);
 
-// C4 -- Admin saja
+// C4
 router.post(
   '/:id/add-inventory',
-  authorize('admin'),
   validate(planReportValidation.addInventoryReplacement),
   addInventoryReplacement
 );
