@@ -2,7 +2,6 @@ const mongoose = require('mongoose');
 const ProductionPlan = require('../models/plan/productionPlan.model');
 const PlanSale = require('../models/selling/selling.model');
 const ApiError = require('../utils/ApiError');
-const menuService = require('./menu.service');
 const { computePricing } = require('../utils/planCompute');
 
 // ---------------------------------------------------------------------------
@@ -10,12 +9,14 @@ const { computePricing } = require('../utils/planCompute');
 // harga) dan HANYA tulis PlanSale + menus[].soldQuantity/soldOutAt. Tidak
 // pernah menyentuh Inventory, ProductionPlan.status, atau menus[].discount.
 //
+// TIDAK ADA dependency ke menu.service.js lagi -- baik harga
+// (frozenSellingPrice) maupun nama (frozenMenuName) sudah dibekukan di
+// ProductionPlan.menus[] saat approve, jadi modul ini tidak pernah perlu
+// live-join ke Menu (cross-module reconciliation item #8).
+//
 // Harga dihitung via computePricing() -- fungsi YANG SAMA dipakai Production
 // Plan module -- supaya tidak ada metodologi harga kedua yang berjalan
-// paralel (prinsip sama seperti Menu.currentCostEstimate reuse). Untuk plan
-// yang sudah `active`, computePricing() selalu mengembalikan
-// effectiveSellingPrice = frozenSellingPrice (dibekukan saat approve),
-// BUKAN Menu.sellingPrice live -- lihat catatan konflik RFC.
+// paralel.
 // ---------------------------------------------------------------------------
 
 // --- B1: List plan aktif + sisa stok + harga berlaku per menu -------------
@@ -23,10 +24,7 @@ const { computePricing } = require('../utils/planCompute');
 async function getActivePlans() {
   const now = new Date();
 
-  // Lazy-check completed, pola sama dengan Production Plan module (endDate
-  // sudah lewat -> completed). Bulk update dulu supaya query 'active' di
-  // bawah sudah bersih -- lebih murah daripada lazy-check per dokumen untuk
-  // endpoint list.
+  // Lazy-check completed, pola sama dengan Production Plan module.
   await ProductionPlan.updateMany(
     { status: 'active', endDate: { $lt: now } },
     { $set: { status: 'completed', completedAt: now } }
@@ -35,18 +33,16 @@ async function getActivePlans() {
   const plans = await ProductionPlan.find({ status: 'active' });
   if (plans.length === 0) return [];
 
-  const menuIds = [...new Set(plans.flatMap((p) => p.menus.map((m) => String(m.menuId))))];
-  const menuDocs = await menuService.getMenusByIds(menuIds);
-  const menuDocsById = new Map(menuDocs.map((m) => [String(m._id), m]));
-
   return plans.map((plan) => {
     const sellable = now >= plan.startDate && now <= plan.endDate;
 
     const menus = plan.menus.map((m) => {
-      const menuDoc = menuDocsById.get(String(m.menuId));
+      // menuDoc param computePricing sengaja null -- untuk plan active,
+      // computePricing tidak pernah membaca menuDoc sama sekali (selalu
+      // pakai frozenSellingPrice).
       const { effectiveSellingPrice, discountedPrice, discountStatus } = computePricing(
         m,
-        menuDoc,
+        null,
         plan.status
       );
       const isDiscounted = discountStatus === 'active';
@@ -54,7 +50,7 @@ async function getActivePlans() {
 
       return {
         menuId: m.menuId,
-        name: menuDoc ? menuDoc.name : null,
+        name: m.frozenMenuName,
         sellingPrice: effectiveSellingPrice,
         currentPrice: isDiscounted ? discountedPrice : effectiveSellingPrice,
         isDiscounted,
@@ -71,7 +67,6 @@ async function getActivePlans() {
       endDate: plan.endDate,
       sellable,
       menus,
-      // Level PLAN, bukan per-menu -- lihat catatan ambiguitas RFC.
       warning: plan.hasPendingLossReplacement
         ? 'Ada laporan kerugian bahan yang sudah disetujui tapi belum diganti stoknya'
         : null,
@@ -114,8 +109,6 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
         ]);
       }
 
-      // Pre-check cepat, pesan ramah -- bukan pengaman utama race condition
-      // (itu ada di atomic guard saat write, di bawah).
       const remainingQuantity = Math.max(
         0,
         planMenu.quantityPlanned - planMenu.soldQuantity - planMenu.lossQuantity
@@ -126,9 +119,6 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
         ]);
       }
 
-      // Harga dihitung SEKARANG, di dalam transaction yang sama dengan
-      // baca/tulis stok -- RFC §5.2/D6, mencegah celah antara admin hapus
-      // diskon dan kasir mencatat sale di detik yang nyaris bersamaan.
       const { effectiveSellingPrice, discountedPrice, discountStatus } = computePricing(
         planMenu,
         null,
@@ -139,12 +129,6 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
       const priceUsed = discountApplied ? discountedPrice : effectiveSellingPrice;
       const discountPercentage = discountApplied ? planMenu.discount.discountPercentage : null;
 
-      // Atomic conditional update -- guard KEDUA di titik tulis (bukan cuma
-      // pre-check di atas), pola sama dengan atomic deduct di Inventory
-      // module. $expr di dalam $elemMatch membandingkan sisa stok TERBARU
-      // (bukan hasil read di awal transaction ini) melawan quantitySold,
-      // supaya dua kasir yang rebutan porsi terakhir di detik yang nyaris
-      // bersamaan tidak bisa dua-duanya lolos.
       const menuObjectId = new mongoose.Types.ObjectId(menuId);
 
       const updatedPlan = await ProductionPlan.findOneAndUpdate(
@@ -178,10 +162,6 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
                           '$$m',
                           {
                             soldQuantity: { $add: ['$$m.soldQuantity', quantitySold] },
-                            // soldOutAt terisi kalau SETELAH increment ini
-                            // sisa porsi = 0 DAN belum lewat endDate (RFC
-                            // D4 -- Plan tetap active, cuma menu ini yang
-                            // habis).
                             soldOutAt: {
                               $cond: [
                                 {
@@ -224,8 +204,6 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
       );
 
       if (!updatedPlan) {
-        // Stok berubah tepat di antara pre-check di atas dan write ini --
-        // kasir lain lebih cepat. Bukan error input, murni race condition.
         throw new ApiError(409, 'Sisa porsi menu ini tidak mencukupi', [
           {
             field: 'quantitySold',
@@ -241,6 +219,7 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
           {
             planId,
             menuId,
+            menuName: planMenu.frozenMenuName,
             quantitySold,
             originalPrice,
             priceUsed,
@@ -257,6 +236,7 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
         _id: sale._id,
         planId: sale.planId,
         menuId: sale.menuId,
+        menuName: sale.menuName,
         quantitySold: sale.quantitySold,
         originalPrice: sale.originalPrice,
         priceUsed: sale.priceUsed,
@@ -291,16 +271,14 @@ async function getSaleHistory(query) {
     filter.soldAt = { $gte: start, $lt: end };
   }
 
+  // menuName sudah tersimpan di tiap PlanSale (snapshot) -- tidak perlu
+  // live-join ke Menu lagi sama sekali.
   const sales = await PlanSale.find(filter).sort({ soldAt: -1 });
-
-  const menuIds = [...new Set(sales.map((s) => String(s.menuId)))];
-  const menuDocs = menuIds.length ? await menuService.getMenusByIds(menuIds) : [];
-  const menuNameById = new Map(menuDocs.map((m) => [String(m._id), m.name]));
 
   const data = sales.map((s) => ({
     _id: s._id,
     menuId: s.menuId,
-    menuName: menuNameById.get(String(s.menuId)) || null,
+    menuName: s.menuName,
     quantitySold: s.quantitySold,
     originalPrice: s.originalPrice,
     priceUsed: s.priceUsed,
@@ -310,7 +288,6 @@ async function getSaleHistory(query) {
     soldAt: s.soldAt,
   }));
 
-  // Dihitung di response time (bukan field tersimpan) -- RFC §8 catatan B3.
   const totalTransaction = sales.length;
   const totalRevenue = sales.reduce((sum, s) => sum + s.priceUsed * s.quantitySold, 0);
   const totalDiscountGiven = sales.reduce(
