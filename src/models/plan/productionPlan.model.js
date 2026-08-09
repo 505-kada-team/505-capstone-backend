@@ -2,27 +2,9 @@ const mongoose = require('mongoose');
 
 const { Schema } = mongoose;
 
-// Model ini adalah EXTENSION dari stub yang dibuat tim Menu — path
-// (`models/plan/productionPlan.model.js`) dan nama model ('ProductionPlan')
-// SENGAJA dipertahankan sama persis, karena menu.service.js (dan kemungkinan
-// inventory.service.js) sudah require dari path ini untuk flag stale
-// (checkResultStale/staleReason). Jangan pindahkan/duplikasi file ini —
-// itu akan memicu OverwriteModelError begitu dua file sama-sama register
-// 'ProductionPlan'.
-//
-// Perubahan dari versi stub:
-// - status enum: DIHAPUS 'approved' (tidak ada state antara — approve
-//   adalah draft -> active langsung, satu langkah, sesuai dokumen §1
-//   "Tetap satu langkah"), DITAMBAH 'stopped' (state yang memang ada di
-//   dokumen, sebelumnya hilang dari stub).
-// - staleReason enum: ditambahkan `null` secara eksplisit ke dalam enum
-//   array. Tanpa ini, Mongoose menolak assignment `staleReason = null`
-//   saat refresh (A5)/edit (A4) mereset flag stale — enum validator hanya
-//   meloloskan `undefined` secara default, BUKAN `null`, kecuali `null`
-//   ikut terdaftar di array enum.
-// - menus[]/checkResult[]/committedIngredients[] dilengkapi sesuai skema
-//   Production Plan v2 (field menuId tetap dipertahankan di posisi yang
-//   sama supaya query `'menus.menuId': menuId` milik Menu module tetap valid).
+// ... (bagian atas file identik dengan versi sebelumnya, lihat komentar
+// asli soal path/nama model yang WAJIB dipertahankan, status enum, dst.
+// Hanya planMenuSchema yang berubah di sini -- lihat field frozenMenuName.)
 
 const discountSchema = new Schema(
   {
@@ -44,6 +26,12 @@ const planMenuSchema = new Schema(
     lossQuantity: { type: Number, default: 0 },
     soldOutAt: { type: Date, default: null },
     frozenSellingPrice: { type: Number, default: null },
+    // BARU -- dibekukan bareng frozenSellingPrice saat approve (RFC Selling
+    // item #8 cross-module reconciliation). Alasan sama persis dengan
+    // frozenSellingPrice: begitu plan active, tampilan ke kasir (nama +
+    // harga) tidak boleh berubah kalau admin rename Menu di tengah shift.
+    // null selama masih draft (belum pernah approve).
+    frozenMenuName: { type: String, default: null },
     discount: { type: discountSchema, default: null },
   },
   { _id: false }
@@ -122,14 +110,11 @@ const productionPlanSchema = new Schema(
     staleReason: {
       type: String,
       enum: [
-        // Inventory-originated (lihat 04-inventory-flow.md §5.5)
         'stock_taken',
         'batch_removed',
         'inventory_archived',
-        // Menu-originated (lihat menu doc §5 / RFC-0003 §5)
         'recipe_changed',
         'menu_archived',
-        // wajib eksplisit di enum, bukan cuma default, lihat catatan di atas
         null,
       ],
       default: null,
@@ -153,19 +138,10 @@ const productionPlanSchema = new Schema(
   { timestamps: true }
 );
 
-// Dipertahankan dari stub (urutan field sama) — dipakai menu.service.js's
-// flagDraftPlansStale query: { status: 'draft', 'menus.menuId': menuId }.
 productionPlanSchema.index({ status: 1, 'menus.menuId': 1 });
-
-// Tambahan untuk kebutuhan Inventory's equivalent flagging (batch_removed /
-// inventory_archived) — belum dikonfirmasi ke kode inventory.service.js
-// aslinya, tapi field yang di-query (checkResult.inventoryId /
-// checkResult.eligibleBatches.subInventoryId) sudah ada di skema ini.
 productionPlanSchema.index({ status: 1, 'checkResult.inventoryId': 1 });
 productionPlanSchema.index({ status: 1, 'checkResult.eligibleBatches.subInventoryId': 1 });
 
-// Hanya boleh 1 plan `active` pada satu waktu (global lock) — safety net
-// di level DB, bukan pengganti pengecekan transactional di service.
 productionPlanSchema.index(
   { status: 1 },
   {

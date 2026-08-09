@@ -4,6 +4,7 @@ const inventoryRoutes = require('./inventory.routes');
 const menuRoutes = require('./menu.routes');
 const planRoutes = require('./plan.routes');
 const sellingRoutes = require('./selling.routes');
+const reportRoutes = require('./report.routes');
 
 const router = express.Router();
 
@@ -12,6 +13,7 @@ router.use('/', inventoryRoutes);
 router.use('/menu', menuRoutes);
 router.use('/plan', planRoutes);
 router.use('/selling', sellingRoutes);
+router.use('/report', reportRoutes);
 
 router.get('/health', (req, res) => res.status(200).json({ success: true, message: 'OK' }));
 
