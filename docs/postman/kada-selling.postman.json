@@ -1,0 +1,186 @@
+{
+  "info": {
+    "name": "KADA - Selling Module",
+    "description": "Endpoint untuk pencatatan penjualan menu dari Production Plan yang sedang active. Hanya membaca ProductionPlan, hanya menulis PlanSale + menus[].soldQuantity/soldOutAt.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "kada-selling-module-001"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{authToken}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000/api", "type": "string" },
+    { "key": "authToken", "value": "", "type": "string" },
+    { "key": "planId", "value": "665f1a2b3c4d5e6f7a8b9c0d", "type": "string" },
+    { "key": "menuId", "value": "665f1a2b3c4d5e6f7a8b9c1a", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Get Active Plans",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/selling/plans",
+          "host": ["{{baseUrl}}"],
+          "path": ["selling", "plans"]
+        },
+        "description": "Mengambil semua Production Plan berstatus active, lengkap dengan sisa stok dan harga berlaku (termasuk diskon) per menu. Melakukan lazy-complete untuk plan yang endDate-nya sudah lewat."
+      },
+      "response": [
+        {
+          "name": "200 OK - Daftar plan aktif",
+          "originalRequest": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/selling/plans",
+              "host": ["{{baseUrl}}"],
+              "path": ["selling", "plans"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"success\": true,\n  \"statusCode\": 200,\n  \"message\": \"Daftar plan aktif berhasil diambil\",\n  \"data\": [\n    {\n      \"planId\": \"665f1a2b3c4d5e6f7a8b9c0d\",\n      \"name\": \"Plan Weekday Pagi - Minggu 32\",\n      \"startDate\": \"2026-08-04T00:00:00.000Z\",\n      \"endDate\": \"2026-08-10T23:59:59.000Z\",\n      \"sellable\": true,\n      \"menus\": [\n        {\n          \"menuId\": \"665f1a2b3c4d5e6f7a8b9c1a\",\n          \"name\": \"Cappuccino Regular\",\n          \"sellingPrice\": 25000,\n          \"currentPrice\": 20000,\n          \"isDiscounted\": true,\n          \"discountPercentage\": 20,\n          \"discountEndsAt\": \"2026-08-10T23:59:59.000Z\",\n          \"remainingQuantity\": 34\n        }\n      ],\n      \"warning\": null\n    }\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "name": "Create Sale",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"planId\": \"{{planId}}\",\n  \"menuId\": \"{{menuId}}\",\n  \"quantitySold\": 2,\n  \"cashierName\": \"Rina\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/selling/sales",
+          "host": ["{{baseUrl}}"],
+          "path": ["selling", "sales"]
+        },
+        "description": "Mencatat satu transaksi penjualan menu dari plan yang sedang active. Validasi window waktu, sisa stok (atomic guard), hitung harga (frozen price + diskon jika aktif), decrement stok, dan insert PlanSale terjadi dalam satu transaction."
+      },
+      "response": [
+        {
+          "name": "201 Created - Penjualan berhasil dicatat",
+          "originalRequest": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"planId\": \"{{planId}}\",\n  \"menuId\": \"{{menuId}}\",\n  \"quantitySold\": 2,\n  \"cashierName\": \"Rina\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/selling/sales",
+              "host": ["{{baseUrl}}"],
+              "path": ["selling", "sales"]
+            }
+          },
+          "status": "Created",
+          "code": 201,
+          "_postman_previewlanguage": "json",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"success\": true,\n  \"statusCode\": 201,\n  \"message\": \"Penjualan berhasil dicatat\",\n  \"data\": {\n    \"_id\": \"665f1a2b3c4d5e6f7a8b9c2e\",\n    \"planId\": \"665f1a2b3c4d5e6f7a8b9c0d\",\n    \"menuId\": \"665f1a2b3c4d5e6f7a8b9c1a\",\n    \"quantitySold\": 2,\n    \"originalPrice\": 25000,\n    \"priceUsed\": 20000,\n    \"discountApplied\": true,\n    \"discountPercentage\": 20,\n    \"cashierName\": \"Rina\",\n    \"soldAt\": \"2026-08-09T04:12:33.000Z\",\n    \"remainingQuantity\": 32\n  }\n}"
+        },
+        {
+          "name": "409 Conflict - Sisa porsi tidak mencukupi",
+          "originalRequest": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"planId\": \"{{planId}}\",\n  \"menuId\": \"{{menuId}}\",\n  \"quantitySold\": 999,\n  \"cashierName\": \"Rina\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/selling/sales",
+              "host": ["{{baseUrl}}"],
+              "path": ["selling", "sales"]
+            }
+          },
+          "status": "Conflict",
+          "code": 409,
+          "_postman_previewlanguage": "json",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"success\": false,\n  \"statusCode\": 409,\n  \"message\": \"Sisa porsi menu ini tidak mencukupi\",\n  \"errors\": [\n    { \"field\": \"quantitySold\", \"message\": \"Sisa 1, diminta 999\" }\n  ]\n}"
+        },
+        {
+          "name": "404 Not Found - Plan tidak active",
+          "originalRequest": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"planId\": \"000000000000000000000000\",\n  \"menuId\": \"{{menuId}}\",\n  \"quantitySold\": 1,\n  \"cashierName\": \"Rina\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/selling/sales",
+              "host": ["{{baseUrl}}"],
+              "path": ["selling", "sales"]
+            }
+          },
+          "status": "Not Found",
+          "code": 404,
+          "_postman_previewlanguage": "json",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"success\": false,\n  \"statusCode\": 404,\n  \"message\": \"Plan tidak ditemukan atau bukan berstatus active\",\n  \"errors\": []\n}"
+        }
+      ]
+    },
+    {
+      "name": "Get Sale History",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/selling/sales/history?planId={{planId}}&date=2026-08-09&cashierName=Rina",
+          "host": ["{{baseUrl}}"],
+          "path": ["selling", "sales", "history"],
+          "query": [
+            { "key": "planId", "value": "{{planId}}", "description": "Filter by plan (opsional)" },
+            {
+              "key": "date",
+              "value": "2026-08-09",
+              "description": "Filter by tanggal soldAt, format YYYY-MM-DD (opsional)"
+            },
+            {
+              "key": "cashierName",
+              "value": "Rina",
+              "description": "Filter by nama kasir (opsional)"
+            }
+          ]
+        },
+        "description": "Mengambil riwayat transaksi penjualan untuk rekonsiliasi shift, dengan ringkasan totalTransaction, totalRevenue, dan totalDiscountGiven (dihitung di response time)."
+      },
+      "response": [
+        {
+          "name": "200 OK - Riwayat penjualan",
+          "originalRequest": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/selling/sales/history?planId={{planId}}&date=2026-08-09&cashierName=Rina",
+              "host": ["{{baseUrl}}"],
+              "path": ["selling", "sales", "history"],
+              "query": [
+                { "key": "planId", "value": "{{planId}}" },
+                { "key": "date", "value": "2026-08-09" },
+                { "key": "cashierName", "value": "Rina" }
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": "{\n  \"success\": true,\n  \"statusCode\": 200,\n  \"message\": \"Riwayat penjualan berhasil diambil\",\n  \"data\": {\n    \"data\": [\n      {\n        \"_id\": \"665f1a2b3c4d5e6f7a8b9c2e\",\n        \"menuId\": \"665f1a2b3c4d5e6f7a8b9c1a\",\n        \"menuName\": \"Cappuccino Regular\",\n        \"quantitySold\": 2,\n        \"originalPrice\": 25000,\n        \"priceUsed\": 20000,\n        \"discountApplied\": true,\n        \"discountPercentage\": 20,\n        \"cashierName\": \"Rina\",\n        \"soldAt\": \"2026-08-09T04:12:33.000Z\"\n      }\n    ],\n    \"summary\": {\n      \"totalTransaction\": 1,\n      \"totalRevenue\": 40000,\n      \"totalDiscountGiven\": 10000\n    }\n  }\n}"
+        }
+      ]
+    }
+  ]
+}
