@@ -135,14 +135,34 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
         {
           _id: planId,
           status: 'active',
-          menus: {
-            $elemMatch: {
-              menuId: menuObjectId,
-              $expr: {
-                $gte: [
-                  { $subtract: ['$quantityPlanned', { $add: ['$soldQuantity', '$lossQuantity'] }] },
-                  quantitySold,
-                ],
+          // FIX: $expr WAJIB di level top-level filter, tidak bisa nested
+          // di dalam $elemMatch ("$expr can only be applied to the
+          // top-level document" -- batasan bahasa query MongoDB, bukan
+          // soal versi). $map + $anyElementTrue mengecek "apakah ADA
+          // elemen menus yang menuId-nya cocok DAN sisa stoknya masih
+          // cukup" -- logic sama persis dengan versi $elemMatch
+          // sebelumnya, cuma dipindah strukturnya.
+          $expr: {
+            $anyElementTrue: {
+              $map: {
+                input: '$menus',
+                as: 'm',
+                in: {
+                  $and: [
+                    { $eq: ['$$m.menuId', menuObjectId] },
+                    {
+                      $gte: [
+                        {
+                          $subtract: [
+                            '$$m.quantityPlanned',
+                            { $add: ['$$m.soldQuantity', '$$m.lossQuantity'] },
+                          ],
+                        },
+                        quantitySold,
+                      ],
+                    },
+                  ],
+                },
               },
             },
           },
