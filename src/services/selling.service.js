@@ -4,27 +4,11 @@ const PlanSale = require('../models/selling/selling.model');
 const ApiError = require('../utils/ApiError');
 const { computePricing } = require('../utils/planCompute');
 
-// ---------------------------------------------------------------------------
-// Prinsip modul ini (RFC §1): HANYA baca ProductionPlan (status/tanggal/
-// harga) dan HANYA tulis PlanSale + menus[].soldQuantity/soldOutAt. Tidak
-// pernah menyentuh Inventory, ProductionPlan.status, atau menus[].discount.
-//
-// TIDAK ADA dependency ke menu.service.js lagi -- baik harga
-// (frozenSellingPrice) maupun nama (frozenMenuName) sudah dibekukan di
-// ProductionPlan.menus[] saat approve, jadi modul ini tidak pernah perlu
-// live-join ke Menu (cross-module reconciliation item #8).
-//
-// Harga dihitung via computePricing() -- fungsi YANG SAMA dipakai Production
-// Plan module -- supaya tidak ada metodologi harga kedua yang berjalan
-// paralel.
-// ---------------------------------------------------------------------------
-
 // --- B1: List plan aktif + sisa stok + harga berlaku per menu -------------
 
 async function getActivePlans() {
   const now = new Date();
 
-  // Lazy-check completed, pola sama dengan Production Plan module.
   await ProductionPlan.updateMany(
     { status: 'active', endDate: { $lt: now } },
     { $set: { status: 'completed', completedAt: now } }
@@ -37,9 +21,6 @@ async function getActivePlans() {
     const sellable = now >= plan.startDate && now <= plan.endDate;
 
     const menus = plan.menus.map((m) => {
-      // menuDoc param computePricing sengaja null -- untuk plan active,
-      // computePricing tidak pernah membaca menuDoc sama sekali (selalu
-      // pakai frozenSellingPrice).
       const { effectiveSellingPrice, discountedPrice, discountStatus } = computePricing(
         m,
         null,
@@ -51,6 +32,9 @@ async function getActivePlans() {
       return {
         menuId: m.menuId,
         name: m.frozenMenuName,
+        // BARU -- dibekukan saat approvePlan(), pola sama dgn
+        // frozenMenuName. Tidak live-join ke Menu.imageUrl.
+        image: m.frozenMenuImage,
         sellingPrice: effectiveSellingPrice,
         currentPrice: isDiscounted ? discountedPrice : effectiveSellingPrice,
         isDiscounted,
@@ -74,9 +58,22 @@ async function getActivePlans() {
   });
 }
 
-// --- B2: Catat penjualan ---------------------------------------------------
+// --- B2: Catat penjualan (1 transaksi, banyak menu) ------------------------
 
-async function createSale({ planId, menuId, quantitySold, cashierName }) {
+async function createSale({ planId, items, cashierName }) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new ApiError(400, 'Transaksi harus punya minimal 1 item', [
+      { field: 'items', message: 'items tidak boleh kosong' },
+    ]);
+  }
+  const menuIdStrings = items.map((i) => String(i.menuId));
+  if (new Set(menuIdStrings).size !== menuIdStrings.length) {
+    // Defense-in-depth -- idealnya sudah ditolak di validation layer juga.
+    throw new ApiError(400, 'menuId yang sama muncul lebih dari sekali dalam satu transaksi', [
+      { field: 'items', message: 'menuId harus unik per transaksi' },
+    ]);
+  }
+
   const session = await mongoose.startSession();
   try {
     let response;
@@ -102,71 +99,125 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
         ]);
       }
 
-      const planMenu = plan.menus.find((m) => String(m.menuId) === String(menuId));
-      if (!planMenu) {
-        throw new ApiError(404, 'Menu ini tidak ada di plan yang sedang aktif ini', [
-          { field: 'menuId', message: 'menuId tidak ditemukan di plan.menus' },
-        ]);
-      }
+      // Validasi in-memory dulu -- ngasih pesan error spesifik per menu.
+      // Bukan sumber kebenaran akhir; itu tetap $expr di findOneAndUpdate
+      // di bawah, buat defend against concurrent sale request lain.
+      const menuMap = new Map(plan.menus.map((m) => [String(m.menuId), m]));
+      const pricedItems = items.map(({ menuId, quantitySold }) => {
+        const planMenu = menuMap.get(String(menuId));
+        if (!planMenu) {
+          throw new ApiError(404, `Menu ${menuId} tidak ada di plan yang sedang aktif ini`, [
+            { field: 'menuId', message: 'menuId tidak ditemukan di plan.menus' },
+          ]);
+        }
+        const remainingQuantity = Math.max(
+          0,
+          planMenu.quantityPlanned - planMenu.soldQuantity - planMenu.lossQuantity
+        );
+        if (quantitySold > remainingQuantity) {
+          throw new ApiError(409, `Sisa porsi menu "${planMenu.frozenMenuName}" tidak mencukupi`, [
+            {
+              field: 'quantitySold',
+              message: `Sisa ${remainingQuantity}, diminta ${quantitySold}`,
+            },
+          ]);
+        }
 
-      const remainingQuantity = Math.max(
-        0,
-        planMenu.quantityPlanned - planMenu.soldQuantity - planMenu.lossQuantity
-      );
-      if (quantitySold > remainingQuantity) {
-        throw new ApiError(409, 'Sisa porsi menu ini tidak mencukupi', [
-          { field: 'quantitySold', message: `Sisa ${remainingQuantity}, diminta ${quantitySold}` },
-        ]);
-      }
+        const { effectiveSellingPrice, discountedPrice, discountStatus } = computePricing(
+          planMenu,
+          null,
+          plan.status
+        );
+        const discountApplied = discountStatus === 'active';
+        const originalPrice = effectiveSellingPrice;
+        const priceUsed = discountApplied ? discountedPrice : effectiveSellingPrice;
+        const discountPercentage = discountApplied ? planMenu.discount.discountPercentage : null;
 
-      const { effectiveSellingPrice, discountedPrice, discountStatus } = computePricing(
-        planMenu,
-        null,
-        plan.status
-      );
-      const discountApplied = discountStatus === 'active';
-      const originalPrice = effectiveSellingPrice;
-      const priceUsed = discountApplied ? discountedPrice : effectiveSellingPrice;
-      const discountPercentage = discountApplied ? planMenu.discount.discountPercentage : null;
+        return {
+          menuId: new mongoose.Types.ObjectId(menuId),
+          menuName: planMenu.frozenMenuName,
+          quantitySold,
+          originalPrice,
+          priceUsed,
+          discountApplied,
+          discountPercentage,
+        };
+      });
 
-      const menuObjectId = new mongoose.Types.ObjectId(menuId);
-
-      const updatedPlan = await ProductionPlan.findOneAndUpdate(
-        {
-          _id: planId,
-          status: 'active',
-          // FIX: $expr WAJIB di level top-level filter, tidak bisa nested
-          // di dalam $elemMatch ("$expr can only be applied to the
-          // top-level document" -- batasan bahasa query MongoDB, bukan
-          // soal versi). $map + $anyElementTrue mengecek "apakah ADA
-          // elemen menus yang menuId-nya cocok DAN sisa stoknya masih
-          // cukup" -- logic sama persis dengan versi $elemMatch
-          // sebelumnya, cuma dipindah strukturnya.
-          $expr: {
-            $anyElementTrue: {
-              $map: {
-                input: '$menus',
-                as: 'm',
-                in: {
-                  $and: [
-                    { $eq: ['$$m.menuId', menuObjectId] },
-                    {
-                      $gte: [
-                        {
-                          $subtract: [
-                            '$$m.quantityPlanned',
-                            { $add: ['$$m.soldQuantity', '$$m.lossQuantity'] },
-                          ],
-                        },
-                        quantitySold,
-                      ],
-                    },
-                  ],
-                },
+      // $expr: SEMUA item harus punya elemen menus yang cocok & stok
+      // cukup, dicek ulang atomic di titik commit.
+      const stockGuardExpr = {
+        $and: pricedItems.map((item) => ({
+          $anyElementTrue: {
+            $map: {
+              input: '$menus',
+              as: 'm',
+              in: {
+                $and: [
+                  { $eq: ['$$m.menuId', item.menuId] },
+                  {
+                    $gte: [
+                      {
+                        $subtract: [
+                          '$$m.quantityPlanned',
+                          { $add: ['$$m.soldQuantity', '$$m.lossQuantity'] },
+                        ],
+                      },
+                      item.quantitySold,
+                    ],
+                  },
+                ],
               },
             },
           },
+        })),
+      };
+
+      // $switch: tiap elemen $menus dicocokkan ke pricedItems berdasarkan
+      // menuId. Yang cocok, soldQuantity-nya ditambah + soldOutAt di-set
+      // kalau abis. Yang nggak dibeli di transaksi ini dikembalikan apa
+      // adanya (default branch).
+      const menuUpdateBranches = pricedItems.map((item) => ({
+        case: { $eq: ['$$m.menuId', item.menuId] },
+        then: {
+          $mergeObjects: [
+            '$$m',
+            {
+              soldQuantity: { $add: ['$$m.soldQuantity', item.quantitySold] },
+              soldOutAt: {
+                $cond: [
+                  {
+                    $and: [
+                      {
+                        $eq: [
+                          {
+                            $subtract: [
+                              '$$m.quantityPlanned',
+                              {
+                                $add: [
+                                  { $add: ['$$m.soldQuantity', item.quantitySold] },
+                                  '$$m.lossQuantity',
+                                ],
+                              },
+                            ],
+                          },
+                          0,
+                        ],
+                      },
+                      { $lt: [now, '$endDate'] },
+                    ],
+                  },
+                  now,
+                  '$$m.soldOutAt',
+                ],
+              },
+            },
+          ],
         },
+      }));
+
+      const updatedPlan = await ProductionPlan.findOneAndUpdate(
+        { _id: planId, status: 'active', $expr: stockGuardExpr },
         [
           {
             $set: {
@@ -174,47 +225,7 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
                 $map: {
                   input: '$menus',
                   as: 'm',
-                  in: {
-                    $cond: [
-                      { $eq: ['$$m.menuId', menuObjectId] },
-                      {
-                        $mergeObjects: [
-                          '$$m',
-                          {
-                            soldQuantity: { $add: ['$$m.soldQuantity', quantitySold] },
-                            soldOutAt: {
-                              $cond: [
-                                {
-                                  $and: [
-                                    {
-                                      $eq: [
-                                        {
-                                          $subtract: [
-                                            '$$m.quantityPlanned',
-                                            {
-                                              $add: [
-                                                { $add: ['$$m.soldQuantity', quantitySold] },
-                                                '$$m.lossQuantity',
-                                              ],
-                                            },
-                                          ],
-                                        },
-                                        0,
-                                      ],
-                                    },
-                                    { $lt: [now, '$endDate'] },
-                                  ],
-                                },
-                                now,
-                                '$$m.soldOutAt',
-                              ],
-                            },
-                          },
-                        ],
-                      },
-                      '$$m',
-                    ],
-                  },
+                  in: { $switch: { branches: menuUpdateBranches, default: '$$m' } },
                 },
               },
             },
@@ -224,49 +235,42 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
       );
 
       if (!updatedPlan) {
-        throw new ApiError(409, 'Sisa porsi menu ini tidak mencukupi', [
+        throw new ApiError(409, 'Sisa porsi salah satu menu tidak mencukupi', [
           {
-            field: 'quantitySold',
+            field: 'items',
             message: 'Stok berubah oleh transaksi lain, silakan cek ulang sisa porsi',
           },
         ]);
       }
 
-      const updatedMenu = updatedPlan.menus.find((m) => String(m.menuId) === String(menuId));
-
-      const [sale] = await PlanSale.create(
-        [
-          {
-            planId,
-            menuId,
-            menuName: planMenu.frozenMenuName,
-            quantitySold,
-            originalPrice,
-            priceUsed,
-            discountApplied,
-            discountPercentage,
-            cashierName,
-            soldAt: now,
-          },
-        ],
+      const [transaction] = await PlanSale.create(
+        [{ planId, cashierName, soldAt: now, items: pricedItems }],
         { session }
       );
 
+      const updatedMenuMap = new Map(updatedPlan.menus.map((m) => [String(m.menuId), m]));
+
       response = {
-        _id: sale._id,
-        planId: sale.planId,
-        menuId: sale.menuId,
-        menuName: sale.menuName,
-        quantitySold: sale.quantitySold,
-        originalPrice: sale.originalPrice,
-        priceUsed: sale.priceUsed,
-        discountApplied: sale.discountApplied,
-        discountPercentage: sale.discountPercentage,
-        cashierName: sale.cashierName,
-        soldAt: sale.soldAt,
-        remainingQuantity: Math.max(
-          0,
-          updatedMenu.quantityPlanned - updatedMenu.soldQuantity - updatedMenu.lossQuantity
+        _id: transaction._id,
+        planId: transaction.planId,
+        cashierName: transaction.cashierName,
+        soldAt: transaction.soldAt,
+        items: transaction.items.map((it) => {
+          const m = updatedMenuMap.get(String(it.menuId));
+          return {
+            menuId: it.menuId,
+            menuName: it.menuName,
+            quantitySold: it.quantitySold,
+            originalPrice: it.originalPrice,
+            priceUsed: it.priceUsed,
+            discountApplied: it.discountApplied,
+            discountPercentage: it.discountPercentage,
+            remainingQuantity: Math.max(0, m.quantityPlanned - m.soldQuantity - m.lossQuantity),
+          };
+        }),
+        totalRevenue: transaction.items.reduce(
+          (sum, it) => sum + it.priceUsed * it.quantitySold,
+          0
         ),
       };
     });
@@ -276,7 +280,7 @@ async function createSale({ planId, menuId, quantitySold, cashierName }) {
   }
 }
 
-// --- B3: Riwayat penjualan (rekonsiliasi shift) ---------------------------
+// --- B3: Riwayat penjualan (per transaksi/struk) ---------------------------
 
 async function getSaleHistory(query) {
   const { planId, date, cashierName } = query;
@@ -291,27 +295,30 @@ async function getSaleHistory(query) {
     filter.soldAt = { $gte: start, $lt: end };
   }
 
-  // menuName sudah tersimpan di tiap PlanSale (snapshot) -- tidak perlu
-  // live-join ke Menu lagi sama sekali.
-  const sales = await PlanSale.find(filter).sort({ soldAt: -1 });
+  const transactions = await PlanSale.find(filter).sort({ soldAt: -1 });
 
-  const data = sales.map((s) => ({
-    _id: s._id,
-    menuId: s.menuId,
-    menuName: s.menuName,
-    quantitySold: s.quantitySold,
-    originalPrice: s.originalPrice,
-    priceUsed: s.priceUsed,
-    discountApplied: s.discountApplied,
-    discountPercentage: s.discountPercentage,
-    cashierName: s.cashierName,
-    soldAt: s.soldAt,
+  const data = transactions.map((t) => ({
+    _id: t._id,
+    planId: t.planId,
+    cashierName: t.cashierName,
+    soldAt: t.soldAt,
+    items: t.items.map((it) => ({
+      menuId: it.menuId,
+      menuName: it.menuName,
+      quantitySold: it.quantitySold,
+      originalPrice: it.originalPrice,
+      priceUsed: it.priceUsed,
+      discountApplied: it.discountApplied,
+      discountPercentage: it.discountPercentage,
+    })),
+    transactionRevenue: t.items.reduce((sum, it) => sum + it.priceUsed * it.quantitySold, 0),
   }));
 
-  const totalTransaction = sales.length;
-  const totalRevenue = sales.reduce((sum, s) => sum + s.priceUsed * s.quantitySold, 0);
-  const totalDiscountGiven = sales.reduce(
-    (sum, s) => sum + s.quantitySold * (s.originalPrice - s.priceUsed),
+  const totalTransaction = transactions.length; // 1 struk = 1
+  const totalRevenue = data.reduce((sum, t) => sum + t.transactionRevenue, 0);
+  const totalDiscountGiven = transactions.reduce(
+    (sum, t) =>
+      sum + t.items.reduce((s, it) => s + it.quantitySold * (it.originalPrice - it.priceUsed), 0),
     0
   );
 
@@ -321,8 +328,4 @@ async function getSaleHistory(query) {
   };
 }
 
-module.exports = {
-  getActivePlans,
-  createSale,
-  getSaleHistory,
-};
+module.exports = { getActivePlans, createSale, getSaleHistory };
