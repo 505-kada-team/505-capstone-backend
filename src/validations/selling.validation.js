@@ -7,8 +7,20 @@ const objectId = Joi.string()
 const createSale = {
   body: Joi.object({
     planId: objectId.required(),
-    menuId: objectId.required(),
-    quantitySold: Joi.number().integer().min(1).required(),
+    items: Joi.array()
+      .items(
+        Joi.object({
+          menuId: objectId.required(),
+          quantitySold: Joi.number().integer().min(1).required(),
+        })
+      )
+      .min(1)
+      .unique('menuId')
+      .required()
+      .messages({
+        'array.min': 'Transaksi harus punya minimal 1 item',
+        'array.unique': 'menuId "{{#value}}" muncul lebih dari sekali dalam satu transaksi',
+      }),
     // cashierName SENGAJA TIDAK ADA di sini -- diambil controller dari
     // req.user.name (hasil authenticate()), bukan input kasir. Karena
     // validate.middleware.js pakai stripUnknown: true, kalau FE masih
