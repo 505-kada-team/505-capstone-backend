@@ -203,6 +203,7 @@ async function createPlan(payload) {
       lossQuantity: 0,
       soldOutAt: null,
       frozenSellingPrice: null,
+      frozenMenuName: null,
       discount: null,
     })),
     checkResult,
@@ -328,6 +329,7 @@ async function updatePlan(id, payload) {
         lossQuantity: prev ? prev.lossQuantity : 0,
         soldOutAt: prev ? prev.soldOutAt : null,
         frozenSellingPrice: null,
+        frozenMenuName: null,
         discount: prev ? prev.discount : null,
       };
     });
@@ -473,7 +475,11 @@ async function approvePlan(id, actor) {
 
     plan.menus = plan.menus.map((m) => {
       const menuDoc = menuDocsById.get(String(m.menuId));
-      return { ...m.toObject(), frozenSellingPrice: menuDoc.sellingPrice };
+      return {
+        ...m.toObject(),
+        frozenSellingPrice: menuDoc.sellingPrice,
+        frozenMenuName: menuDoc.name,
+      };
     });
 
     plan.status = 'active';
