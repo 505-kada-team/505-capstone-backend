@@ -13,7 +13,7 @@ router.use('/', inventoryRoutes);
 router.use('/menu', menuRoutes);
 router.use('/plan', planRoutes);
 router.use('/selling', sellingRoutes);
-router.use('/report', reportRoutes);
+router.use('/plan-reports', reportRoutes);
 
 router.get('/health', (req, res) => res.status(200).json({ success: true, message: 'OK' }));
 
