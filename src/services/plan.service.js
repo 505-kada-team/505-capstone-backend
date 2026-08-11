@@ -269,7 +269,11 @@ async function getPlanById(id) {
   const plan = await getPlanOrThrow(id);
 
   const wasMutated = applyLazyCompleteCheck(plan);
-  if (wasMutated) await plan.save();
+  // validateModifiedOnly -- plan might be a legacy active plan approved
+  // before the unit/batchCode/quantityRemaining patch; we're only flipping
+  // status/completedAt here, so we must not re-validate untouched legacy
+  // committedIngredients/frozenRecipe subdocs (see stopPlan for full context).
+  if (wasMutated) await plan.save({ validateModifiedOnly: true });
 
   const menuIds = plan.menus.map((m) => m.menuId);
   const menuDocs = await menuService.getMenusByIds(menuIds);
@@ -342,7 +346,11 @@ async function updatePlan(id, payload) {
   plan.staleReason = null;
   plan.readyToApprove = readyToApprove;
 
-  await plan.save();
+  // validateModifiedOnly -- draft plans created before the unit/batchCode/
+  // quantityRemaining patch may retain legacy subdocs (e.g. menus not
+  // included in this edit's payload) missing those fields; only the paths
+  // we actually reassigned above should be validated.
+  await plan.save({ validateModifiedOnly: true });
   return toSummaryResponse(plan, menuDocsById);
 }
 
@@ -371,7 +379,8 @@ async function refreshAvailability(id) {
   plan.checkResultStale = false;
   plan.staleReason = null;
   plan.readyToApprove = readyToApprove;
-  await plan.save();
+  // validateModifiedOnly -- see updatePlan comment above, same reasoning.
+  await plan.save({ validateModifiedOnly: true });
 
   return {
     readyToApprove: plan.readyToApprove,
@@ -460,7 +469,8 @@ async function approvePlan(id, actor) {
     plan.checkResultStale = false;
     plan.staleReason = null;
     plan.readyToApprove = readyToApprove;
-    await plan.save();
+    // validateModifiedOnly -- see updatePlan comment above, same reasoning.
+    await plan.save({ validateModifiedOnly: true });
 
     throw new ApiError(
       409,
@@ -547,7 +557,13 @@ async function stopPlan(id, { reason, stoppedBy }) {
   plan.stoppedAt = new Date();
   plan.stoppedBy = stoppedBy;
   plan.stopReason = reason;
-  await plan.save();
+  // validateModifiedOnly -- REQUIRED for plans approved before the
+  // unit/batchCode/quantityRemaining patch: their committedIngredients/
+  // frozenRecipe subdocs predate those required fields, and a normal
+  // .save() re-validates the WHOLE document tree, not just what changed.
+  // We're only touching status/stoppedAt/stoppedBy/stopReason here, so we
+  // must not fail on legacy subdocs we never touched.
+  await plan.save({ validateModifiedOnly: true });
 
   // TODO: generate PlanFinalReport (reason: "stopped") — di luar scope
   // modul Production Plan, lihat dokumentasi Plan Report.
@@ -578,7 +594,10 @@ async function cancelPlan(id) {
 
   plan.status = 'cancelled';
   plan.cancelledAt = new Date();
-  await plan.save();
+  // validateModifiedOnly -- legacy draft plans may have checkResult entries
+  // saved before `unit` was required on checkResultSchema; we're only
+  // touching status/cancelledAt here.
+  await plan.save({ validateModifiedOnly: true });
 
   return { _id: plan._id, status: plan.status, cancelledAt: plan.cancelledAt };
 }
@@ -623,7 +642,10 @@ async function setDiscount(id, menuId, payload, actor) {
     setAt: new Date(),
   };
 
-  await plan.save();
+  // validateModifiedOnly -- planMenu could belong to a legacy active plan
+  // (committedIngredients/frozenRecipe predating the unit patch); we're
+  // only writing planMenu.discount here.
+  await plan.save({ validateModifiedOnly: true });
 
   const menuDocs = await menuService.getMenusByIds([menuId]);
   const menuDoc = menuDocs[0];
@@ -657,7 +679,8 @@ async function removeDiscount(id, menuId) {
   }
 
   planMenu.discount = null;
-  await plan.save();
+  // validateModifiedOnly -- same reasoning as setDiscount above.
+  await plan.save({ validateModifiedOnly: true });
 
   return { menuId, discount: null };
 }
