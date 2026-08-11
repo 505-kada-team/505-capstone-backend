@@ -1,9 +1,25 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
-// Snapshot 1 baris item di dalam 1 transaksi checkout. _id: false karena
-// item ini bukan entitas independen -- immutable sejak ditulis, sama
-// prinsipnya dengan originalPrice/priceUsed di versi lama.
+const batchUsageSchema = new Schema(
+  {
+    subInventoryId: { type: Schema.Types.ObjectId, ref: 'SubInventory', required: true },
+    batchCode: { type: String, required: true },
+    quantityUsed: { type: Number, required: true },
+    expired: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+const ingredientUsageSchema = new Schema(
+  {
+    inventoryId: { type: Schema.Types.ObjectId, ref: 'Inventory', required: true },
+    nameInventory: { type: String, required: true },
+    batches: { type: [batchUsageSchema], default: [] },
+  },
+  { _id: false }
+);
+
 const saleItemSchema = new Schema(
   {
     menuId: { type: Schema.Types.ObjectId, ref: 'Menu', required: true },
@@ -13,13 +29,11 @@ const saleItemSchema = new Schema(
     priceUsed: { type: Number, required: true, min: 0 },
     discountApplied: { type: Boolean, required: true, default: false },
     discountPercentage: { type: Number, default: null, min: 1, max: 100 },
+    ingredientsUsed: { type: [ingredientUsageSchema], default: [] },
   },
   { _id: false }
 );
 
-// BERUBAH MAKNA: 1 dokumen sekarang = 1 transaksi/checkout (1 struk),
-// BUKAN 1 item terjual. Append-only, tidak ada update/delete method,
-// sama seperti sebelumnya.
 const planSaleSchema = new Schema(
   {
     planId: { type: Schema.Types.ObjectId, ref: 'ProductionPlan', required: true },

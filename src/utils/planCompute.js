@@ -87,6 +87,7 @@ function computeIngredientsDetail({ planMenu, menuDoc, checkResult }) {
     return {
       inventoryId: ing.inventoryId,
       nameInventory: ing.nameInventory,
+      unit: ing.unit, // BARU
       quantityNeeded,
       // angka ASLI dari checkAvailability, bukan approksimasi
       availableQuantity: entry?.availableQuantity ?? null,
@@ -151,10 +152,64 @@ function computeSuggestion({ staleReason, inventorySafetyStatus, readyToApprove 
   return 'ready_to_approve';
 }
 
+function computeCommittedIngredientsDetail({ planMenu, committedIngredients }) {
+  const committedByInventoryId = new Map(
+    (committedIngredients || []).map((e) => [String(e.inventoryId), e])
+  );
+
+  const ingredientsDetail = (planMenu.frozenRecipe || []).map((recipeItem) => {
+    const entry = committedByInventoryId.get(String(recipeItem.inventoryId));
+    const quantityNeeded = recipeItem.quantityPerUnit * planMenu.quantityPlanned;
+    const batches = entry?.batches || [];
+
+    const totalOriginalQuantity = batches.reduce((sum, b) => sum + b.quantityUsed, 0);
+    const totalOriginalCost = batches.reduce((sum, b) => sum + b.quantityUsed * b.costPriceUsed, 0);
+    const unitCost = totalOriginalQuantity > 0 ? totalOriginalCost / totalOriginalQuantity : null;
+
+    const remainingBatches = batches.filter((b) => b.quantityRemaining > 0);
+    const quantityAvailable = remainingBatches.reduce((sum, b) => sum + b.quantityRemaining, 0);
+    const nearestExpiry = remainingBatches.length
+      ? remainingBatches.reduce((min, b) => {
+          if (!b.expired) return min;
+          const t = new Date(b.expired).getTime();
+          return min === null || t < min ? t : min;
+        }, null)
+      : null;
+
+    return {
+      inventoryId: recipeItem.inventoryId,
+      nameInventory: recipeItem.nameInventory,
+      unit: recipeItem.unit, // BARU
+      quantityNeeded,
+      quantityAvailable,
+      poolShared: true,
+      nearestExpiry: nearestExpiry ? new Date(nearestExpiry) : null,
+      hasUnsafeBatch: remainingBatches.some((b) => b.batchSafetyStatus === 'unsafe'),
+      unitCost,
+      costContribution: unitCost != null ? quantityNeeded * unitCost : null,
+    };
+  });
+
+  // FIX -- array kosong artinya frozenRecipe belum ada (data hilang), BUKAN
+  // "semua ingredient lengkap costnya". .every() pada array kosong selalu
+  // true -- itu yang bikin costPerPortion:0 muncul kayak angka valid di
+  // respons, padahal seharusnya null + costComplete:false.
+  const costComplete =
+    ingredientsDetail.length > 0 && ingredientsDetail.every((d) => d.unitCost != null);
+  const costPerPortion = costComplete
+    ? ingredientsDetail.reduce((sum, d) => sum + (d.costContribution || 0), 0) /
+      planMenu.quantityPlanned
+    : null;
+  const lowStock = ingredientsDetail.some((d) => d.quantityAvailable < d.quantityNeeded);
+
+  return { ingredientsDetail, costComplete, costPerPortion, lowStock };
+}
+
 module.exports = {
   computePricing,
   computeRemainingQuantity,
   computeIngredientsDetail,
+  computeCommittedIngredientsDetail,
   computeMenuCost,
   computeInventorySafetyStatus,
   computeSuggestion,

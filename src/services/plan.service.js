@@ -4,6 +4,7 @@ const {
   computePricing,
   computeRemainingQuantity,
   computeIngredientsDetail,
+  computeCommittedIngredientsDetail,
   computeMenuCost,
   computeInventorySafetyStatus,
   computeSuggestion,
@@ -471,7 +472,10 @@ async function approvePlan(id, actor) {
   // Step 2 — commit plan jadi active. deductResult.items sudah persis bentuk
   // committedIngredientSchema — tinggal pass-through.
   try {
-    plan.committedIngredients = deductResult.items;
+    plan.committedIngredients = deductResult.items.map((ing) => ({
+      ...ing,
+      batches: ing.batches.map((b) => ({ ...b, quantityRemaining: b.quantityUsed })),
+    }));
 
     plan.menus = plan.menus.map((m) => {
       const menuDoc = menuDocsById.get(String(m.menuId));
@@ -479,6 +483,13 @@ async function approvePlan(id, actor) {
         ...m.toObject(),
         frozenSellingPrice: menuDoc.sellingPrice,
         frozenMenuName: menuDoc.name,
+        frozenMenuImage: menuDoc.image ?? null,
+        frozenRecipe: (menuDoc.ingredients || []).map((ing) => ({
+          inventoryId: ing.inventoryId,
+          nameInventory: ing.nameInventory,
+          unit: ing.unit, // BARU -- sudah ada di menuDoc.ingredients (buildCostBreakdown)
+          quantityPerUnit: ing.quantityNeeded,
+        })),
       };
     });
 
@@ -699,7 +710,8 @@ function toSummaryResponse(plan, menuDocsById) {
  * untuk active/completed/stopped, committedIngredients yang jadi acuan.
  */
 function toDetailedResponse(plan, menuDocsById) {
-  const inventorySafetyStatus = computeInventorySafetyStatus(plan.checkResult);
+  const isDraft = plan.status === 'draft';
+  const inventorySafetyStatus = isDraft ? computeInventorySafetyStatus(plan.checkResult) : null;
 
   const menus = plan.menus.map((m) => {
     const menuDoc = menuDocsById.get(String(m.menuId));
@@ -707,15 +719,14 @@ function toDetailedResponse(plan, menuDocsById) {
 
     const base = {
       menuId: m.menuId,
-      name: menuDoc ? menuDoc.name : null,
+      name: isDraft ? (menuDoc ? menuDoc.name : null) : m.frozenMenuName,
       quantityPlanned: m.quantityPlanned,
       soldQuantity: m.soldQuantity,
       lossQuantity: m.lossQuantity,
       soldOutAt: m.soldOutAt,
-      remainingQuantity:
-        plan.status !== 'draft'
-          ? computeRemainingQuantity(m, 0 /* TODO: dari Plan Report */)
-          : undefined,
+      remainingQuantity: !isDraft
+        ? computeRemainingQuantity(m, 0 /* TODO: dari Plan Report */)
+        : undefined,
       frozenSellingPrice: m.frozenSellingPrice,
       ...pricing,
       discount: m.discount
@@ -727,7 +738,7 @@ function toDetailedResponse(plan, menuDocsById) {
         : null,
     };
 
-    if (plan.status === 'draft' && menuDoc) {
+    if (isDraft && menuDoc) {
       const { ingredientsDetail, lowStock } = computeIngredientsDetail({
         planMenu: m,
         menuDoc,
@@ -741,13 +752,27 @@ function toDetailedResponse(plan, menuDocsById) {
       return { ...base, lowStock, ...costInfo, ingredientsDetail };
     }
 
-    return base;
-  });
+    if (!isDraft) {
+      const { ingredientsDetail, costComplete, costPerPortion, lowStock } =
+        computeCommittedIngredientsDetail({
+          planMenu: m,
+          committedIngredients: plan.committedIngredients,
+        });
+      const estimatedProfit =
+        costComplete && pricing.effectiveSellingPrice != null
+          ? (pricing.effectiveSellingPrice - costPerPortion) * m.quantityPlanned
+          : null;
+      return {
+        ...base,
+        lowStock,
+        costComplete,
+        costPerPortion,
+        estimatedProfit,
+        committedIngredientsDetail: ingredientsDetail,
+      };
+    }
 
-  const suggestion = computeSuggestion({
-    staleReason: plan.staleReason,
-    inventorySafetyStatus,
-    readyToApprove: plan.readyToApprove,
+    return base;
   });
 
   const response = {
@@ -758,18 +783,22 @@ function toDetailedResponse(plan, menuDocsById) {
     startDate: plan.startDate,
     duration: plan.duration,
     endDate: plan.endDate,
-    inventorySafetyStatus,
-    suggestion,
-    checkResultStale: plan.checkResultStale,
-    staleReason: plan.staleReason,
-    readyToApprove: plan.readyToApprove,
     hasPendingLossReplacement: plan.hasPendingLossReplacement,
     menus,
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt,
   };
 
-  if (plan.status === 'draft') {
+  if (isDraft) {
+    response.inventorySafetyStatus = inventorySafetyStatus;
+    response.suggestion = computeSuggestion({
+      staleReason: plan.staleReason,
+      inventorySafetyStatus,
+      readyToApprove: plan.readyToApprove,
+    });
+    response.checkResultStale = plan.checkResultStale;
+    response.staleReason = plan.staleReason;
+    response.readyToApprove = plan.readyToApprove;
     response.checkResult = plan.checkResult;
   } else {
     response.committedIngredients = plan.committedIngredients;
@@ -780,14 +809,12 @@ function toDetailedResponse(plan, menuDocsById) {
       response.stoppedBy = plan.stoppedBy;
       response.stopReason = plan.stopReason;
     }
-    if (plan.status === 'completed') {
-      response.completedAt = plan.completedAt;
-    }
+    if (plan.status === 'completed') response.completedAt = plan.completedAt;
   }
 
   if (plan.hasPendingLossReplacement) {
     response.warning = 'Ada laporan kerugian bahan yang sudah disetujui tapi belum diganti stoknya';
-  } else if (plan.checkResultStale) {
+  } else if (isDraft && plan.checkResultStale) {
     const warnings = {
       stock_taken:
         'Stok bahan berkurang sejak simulasi terakhir. Disarankan refresh check-availability.',
