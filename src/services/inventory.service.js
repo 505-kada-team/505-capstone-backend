@@ -495,9 +495,11 @@ async function deduct({ items, availableUntil, reference }) {
           quantityNeeded: amountNeeded,
           batches: plan.map((step) => ({
             subInventoryId: step.subInventoryId,
+            batchCode: step.batchCode, // BARU
             quantityUsed: step.take,
             costPriceUsed: step.costPrices,
             batchSafetyStatus: step.batchSafetyStatus,
+            expired: step.expired, // BARU
           })),
         });
       }

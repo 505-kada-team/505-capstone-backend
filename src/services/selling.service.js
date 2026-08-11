@@ -2,9 +2,9 @@ const mongoose = require('mongoose');
 const ProductionPlan = require('../models/plan/productionPlan.model');
 const PlanSale = require('../models/selling/selling.model');
 const ApiError = require('../utils/ApiError');
-const { computePricing } = require('../utils/planCompute');
+const { computePricing, computeCommittedIngredientsDetail } = require('../utils/planCompute');
 
-// --- B1: List plan aktif + sisa stok + harga berlaku per menu -------------
+// --- B1: List plan aktif ----------------------------------------------
 
 async function getActivePlans() {
   const now = new Date();
@@ -29,11 +29,35 @@ async function getActivePlans() {
       const isDiscounted = discountStatus === 'active';
       const remainingQuantity = Math.max(0, m.quantityPlanned - m.soldQuantity - m.lossQuantity);
 
+      // Reuse compute Production Plan, buang field cost -- kasir/barista
+      // nggak perlu lihat harga modal bahan.
+      const { ingredientsDetail: full } = computeCommittedIngredientsDetail({
+        planMenu: m,
+        committedIngredients: plan.committedIngredients,
+      });
+      const ingredientsDetail = full.map(
+        ({
+          inventoryId,
+          nameInventory,
+          quantityNeeded,
+          quantityAvailable,
+          poolShared,
+          nearestExpiry,
+          hasUnsafeBatch,
+        }) => ({
+          inventoryId,
+          nameInventory,
+          quantityNeeded,
+          quantityAvailable,
+          poolShared,
+          nearestExpiry,
+          hasUnsafeBatch,
+        })
+      );
+
       return {
         menuId: m.menuId,
         name: m.frozenMenuName,
-        // BARU -- dibekukan saat approvePlan(), pola sama dgn
-        // frozenMenuName. Tidak live-join ke Menu.imageUrl.
         image: m.frozenMenuImage,
         sellingPrice: effectiveSellingPrice,
         currentPrice: isDiscounted ? discountedPrice : effectiveSellingPrice,
@@ -41,8 +65,26 @@ async function getActivePlans() {
         discountPercentage: isDiscounted ? m.discount.discountPercentage : null,
         discountEndsAt: isDiscounted ? m.discount.endDate : null,
         remainingQuantity,
+        ingredientsDetail,
       };
     });
+
+    // Antrean batch level-plan -- semua batch tersisa lintas ingredient,
+    // urut FEFO (expiry ascending), TANPA harga.
+    const committedBatchesQueue = plan.committedIngredients
+      .flatMap((ing) =>
+        ing.batches
+          .filter((b) => b.quantityRemaining > 0)
+          .map((b) => ({
+            inventoryId: ing.inventoryId,
+            nameInventory: ing.nameInventory,
+            batchCode: b.batchCode,
+            quantityRemaining: b.quantityRemaining,
+            expired: b.expired,
+            batchSafetyStatus: b.batchSafetyStatus,
+          }))
+      )
+      .sort((a, b) => new Date(a.expired) - new Date(b.expired));
 
     return {
       planId: plan._id,
@@ -51,6 +93,7 @@ async function getActivePlans() {
       endDate: plan.endDate,
       sellable,
       menus,
+      committedBatchesQueue,
       warning: plan.hasPendingLossReplacement
         ? 'Ada laporan kerugian bahan yang sudah disetujui tapi belum diganti stoknya'
         : null,
@@ -58,7 +101,7 @@ async function getActivePlans() {
   });
 }
 
-// --- B2: Catat penjualan (1 transaksi, banyak menu) ------------------------
+// --- B2: Catat penjualan (multi-item + FEFO decrement) ---------------
 
 async function createSale({ planId, items, cashierName }) {
   if (!Array.isArray(items) || items.length === 0) {
@@ -68,7 +111,6 @@ async function createSale({ planId, items, cashierName }) {
   }
   const menuIdStrings = items.map((i) => String(i.menuId));
   if (new Set(menuIdStrings).size !== menuIdStrings.length) {
-    // Defense-in-depth -- idealnya sudah ditolak di validation layer juga.
     throw new ApiError(400, 'menuId yang sama muncul lebih dari sekali dalam satu transaksi', [
       { field: 'items', message: 'menuId harus unik per transaksi' },
     ]);
@@ -79,17 +121,13 @@ async function createSale({ planId, items, cashierName }) {
     let response;
     await session.withTransaction(async () => {
       const plan = await ProductionPlan.findOne({ _id: planId, status: 'active' }).session(session);
-      if (!plan) {
-        throw new ApiError(404, 'Plan tidak ditemukan atau bukan berstatus active');
-      }
+      if (!plan) throw new ApiError(404, 'Plan tidak ditemukan atau bukan berstatus active');
 
       const now = new Date();
       if (now < plan.startDate) {
         throw new ApiError(
           400,
-          `Plan belum dimulai, penjualan baru bisa dicatat mulai ${plan.startDate
-            .toISOString()
-            .slice(0, 10)}`,
+          `Plan belum dimulai, penjualan baru bisa dicatat mulai ${plan.startDate.toISOString().slice(0, 10)}`,
           [{ field: 'startDate', message: 'Tanggal sekarang masih sebelum startDate plan' }]
         );
       }
@@ -99,9 +137,6 @@ async function createSale({ planId, items, cashierName }) {
         ]);
       }
 
-      // Validasi in-memory dulu -- ngasih pesan error spesifik per menu.
-      // Bukan sumber kebenaran akhir; itu tetap $expr di findOneAndUpdate
-      // di bawah, buat defend against concurrent sale request lain.
       const menuMap = new Map(plan.menus.map((m) => [String(m.menuId), m]));
       const pricedItems = items.map(({ menuId, quantitySold }) => {
         const planMenu = menuMap.get(String(menuId));
@@ -144,8 +179,7 @@ async function createSale({ planId, items, cashierName }) {
         };
       });
 
-      // $expr: SEMUA item harus punya elemen menus yang cocok & stok
-      // cukup, dicek ulang atomic di titik commit.
+      // --- Stock guard (porsi menu) -- sama seperti sebelumnya ---
       const stockGuardExpr = {
         $and: pricedItems.map((item) => ({
           $anyElementTrue: {
@@ -173,10 +207,6 @@ async function createSale({ planId, items, cashierName }) {
         })),
       };
 
-      // $switch: tiap elemen $menus dicocokkan ke pricedItems berdasarkan
-      // menuId. Yang cocok, soldQuantity-nya ditambah + soldOutAt di-set
-      // kalau abis. Yang nggak dibeli di transaksi ini dikembalikan apa
-      // adanya (default branch).
       const menuUpdateBranches = pricedItems.map((item) => ({
         case: { $eq: ['$$m.menuId', item.menuId] },
         then: {
@@ -216,9 +246,163 @@ async function createSale({ planId, items, cashierName }) {
         },
       }));
 
+      // --- FEFO decrement (bahan) -- baru ---
+      const itemsForFefo = pricedItems.map((item) => {
+        const planMenu = menuMap.get(String(item.menuId));
+        return {
+          menuId: item.menuId,
+          ingredientsNeeded: (planMenu.frozenRecipe || []).map((r) => ({
+            inventoryId: r.inventoryId,
+            needed: r.quantityPerUnit * item.quantitySold,
+          })),
+        };
+      });
+
+      const fefoWalkOneIngredient = {
+        $let: {
+          vars: {
+            sortedBatches: {
+              $sortArray: {
+                input: { $ifNull: ['$$ingredientEntry.batches', []] },
+                sortBy: { expired: 1 },
+              },
+            },
+          },
+          in: {
+            $reduce: {
+              input: '$$sortedBatches',
+              initialValue: { remainingNeed: '$$this.needed', batches: [], taken: [] },
+              in: {
+                $let: {
+                  vars: {
+                    allocate: { $min: ['$$value.remainingNeed', '$$this.quantityRemaining'] },
+                  },
+                  in: {
+                    remainingNeed: { $subtract: ['$$value.remainingNeed', '$$allocate'] },
+                    batches: {
+                      $concatArrays: [
+                        '$$value.batches',
+                        [
+                          {
+                            $mergeObjects: [
+                              '$$this',
+                              {
+                                quantityRemaining: {
+                                  $subtract: ['$$this.quantityRemaining', '$$allocate'],
+                                },
+                              },
+                            ],
+                          },
+                        ],
+                      ],
+                    },
+                    taken: {
+                      $concatArrays: [
+                        '$$value.taken',
+                        {
+                          $cond: [
+                            { $gt: ['$$allocate', 0] },
+                            [
+                              {
+                                subInventoryId: '$$this.subInventoryId',
+                                batchCode: '$$this.batchCode',
+                                quantityUsed: '$$allocate',
+                                expired: '$$this.expired',
+                              },
+                            ],
+                            [],
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const applyItemToCommittedIngredients = {
+        $reduce: {
+          input: '$$this.ingredientsNeeded',
+          initialValue: { committedIngredients: '$$value.committedIngredients', itemBreakdown: [] },
+          in: {
+            $let: {
+              vars: {
+                ingredientEntry: {
+                  $first: {
+                    $filter: {
+                      input: '$$value.committedIngredients',
+                      as: 'ing',
+                      cond: { $eq: ['$$ing.inventoryId', '$$this.inventoryId'] },
+                    },
+                  },
+                },
+              },
+              in: {
+                $let: {
+                  vars: { walk: fefoWalkOneIngredient },
+                  in: {
+                    committedIngredients: {
+                      $map: {
+                        input: '$$value.committedIngredients',
+                        as: 'ing',
+                        in: {
+                          $cond: [
+                            { $eq: ['$$ing.inventoryId', '$$this.inventoryId'] },
+                            { $mergeObjects: ['$$ing', { batches: '$$walk.batches' }] },
+                            '$$ing',
+                          ],
+                        },
+                      },
+                    },
+                    itemBreakdown: {
+                      $concatArrays: [
+                        '$$value.itemBreakdown',
+                        [
+                          {
+                            inventoryId: '$$this.inventoryId',
+                            nameInventory: '$$ingredientEntry.nameInventory',
+                            batches: '$$walk.taken',
+                            shortfall: { $max: ['$$walk.remainingNeed', 0] },
+                          },
+                        ],
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const fefoReduceExpr = {
+        $reduce: {
+          input: { $literal: itemsForFefo },
+          initialValue: { committedIngredients: '$committedIngredients', breakdown: [] },
+          in: {
+            $let: {
+              vars: { applied: applyItemToCommittedIngredients },
+              in: {
+                committedIngredients: '$$applied.committedIngredients',
+                breakdown: {
+                  $concatArrays: [
+                    '$$value.breakdown',
+                    [{ menuId: '$$this.menuId', ingredientsUsed: '$$applied.itemBreakdown' }],
+                  ],
+                },
+              },
+            },
+          },
+        },
+      };
+
       const updatedPlan = await ProductionPlan.findOneAndUpdate(
         { _id: planId, status: 'active', $expr: stockGuardExpr },
         [
+          { $set: { _fefoResult: fefoReduceExpr } },
           {
             $set: {
               menus: {
@@ -228,8 +412,11 @@ async function createSale({ planId, items, cashierName }) {
                   in: { $switch: { branches: menuUpdateBranches, default: '$$m' } },
                 },
               },
+              committedIngredients: '$_fefoResult.committedIngredients',
+              _pendingSaleAllocation: '$_fefoResult.breakdown',
             },
           },
+          { $unset: '_fefoResult' },
         ],
         { session, new: true }
       );
@@ -243,8 +430,39 @@ async function createSale({ planId, items, cashierName }) {
         ]);
       }
 
+      const shortfallItem = updatedPlan._pendingSaleAllocation.find((b) =>
+        b.ingredientsUsed.some((i) => i.shortfall > 0)
+      );
+      if (shortfallItem) {
+        const bad = shortfallItem.ingredientsUsed.find((i) => i.shortfall > 0);
+        throw new ApiError(
+          409,
+          `Reservasi bahan "${bad.nameInventory}" tidak mencukupi untuk transaksi ini`,
+          [
+            {
+              field: 'items',
+              message: 'Kemungkinan ada bahan hilang/rusak yang belum dilaporkan lewat loss report',
+            },
+          ]
+        );
+      }
+
+      const breakdownByMenuId = new Map(
+        updatedPlan._pendingSaleAllocation.map((b) => [String(b.menuId), b.ingredientsUsed])
+      );
+      await ProductionPlan.updateOne(
+        { _id: planId },
+        { $unset: { _pendingSaleAllocation: '' } },
+        { session }
+      );
+
+      const finalPricedItems = pricedItems.map((item) => ({
+        ...item,
+        ingredientsUsed: breakdownByMenuId.get(String(item.menuId)) || [],
+      }));
+
       const [transaction] = await PlanSale.create(
-        [{ planId, cashierName, soldAt: now, items: pricedItems }],
+        [{ planId, cashierName, soldAt: now, items: finalPricedItems }],
         { session }
       );
 
@@ -265,6 +483,7 @@ async function createSale({ planId, items, cashierName }) {
             priceUsed: it.priceUsed,
             discountApplied: it.discountApplied,
             discountPercentage: it.discountPercentage,
+            ingredientsUsed: it.ingredientsUsed,
             remainingQuantity: Math.max(0, m.quantityPlanned - m.soldQuantity - m.lossQuantity),
           };
         }),
@@ -280,7 +499,7 @@ async function createSale({ planId, items, cashierName }) {
   }
 }
 
-// --- B3: Riwayat penjualan (per transaksi/struk) ---------------------------
+// --- B3: Riwayat penjualan (per transaksi/struk) ---------------------
 
 async function getSaleHistory(query) {
   const { planId, date, cashierName } = query;
@@ -310,11 +529,12 @@ async function getSaleHistory(query) {
       priceUsed: it.priceUsed,
       discountApplied: it.discountApplied,
       discountPercentage: it.discountPercentage,
+      ingredientsUsed: it.ingredientsUsed,
     })),
     transactionRevenue: t.items.reduce((sum, it) => sum + it.priceUsed * it.quantitySold, 0),
   }));
 
-  const totalTransaction = transactions.length; // 1 struk = 1
+  const totalTransaction = transactions.length;
   const totalRevenue = data.reduce((sum, t) => sum + t.transactionRevenue, 0);
   const totalDiscountGiven = transactions.reduce(
     (sum, t) =>
@@ -322,10 +542,7 @@ async function getSaleHistory(query) {
     0
   );
 
-  return {
-    data,
-    summary: { totalTransaction, totalRevenue, totalDiscountGiven },
-  };
+  return { data, summary: { totalTransaction, totalRevenue, totalDiscountGiven } };
 }
 
 module.exports = { getActivePlans, createSale, getSaleHistory };

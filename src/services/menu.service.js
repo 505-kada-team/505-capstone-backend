@@ -287,6 +287,7 @@ async function getMenusByIds(menuIds) {
       return {
         _id: menu._id,
         name: menu.name,
+        image: menu.image,
         status: menu.status,
         sellingPrice: menu.sellingPrice,
         ingredients: breakdown.ingredients,
