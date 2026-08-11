@@ -271,8 +271,26 @@ async function listReports({ planId, status, category }) {
     quantityLost: r.quantityLost,
     incidentAt: r.incidentAt,
     isLateReport: r.isLateReport,
+    // BARU -- field yang diisi user waktu lapor (C1), sebelumnya kesimpen
+    // di dokumen tapi nggak pernah dipetakan ke response GET history.
+    reason: r.reason,
+    reportedBy: r.reportedBy,
+    reportedByRole: r.reportedByRole,
     status: r.status,
+    // BARU -- jejak review (C3): siapa yang ACC/tolak, kapan, dan catatannya.
+    // null selama status masih 'pending' (belum pernah direview).
+    reviewedBy: r.reviewedBy ?? null,
+    reviewedAt: r.reviewedAt ?? null,
+    adminNote: r.adminNote ?? null,
     replacementDeducted: r.category === 'ingredient' ? r.replacementDeducted : undefined,
+    // BARU -- detail penggantian stok (C4), hanya relevan utk category:
+    // ingredient yang sudah replacementDeducted: true.
+    replacementQuantity: r.category === 'ingredient' ? (r.replacementQuantity ?? null) : undefined,
+    replacementCost: r.category === 'ingredient' ? (r.replacementCost ?? null) : undefined,
+    replacementBatches: r.category === 'ingredient' ? (r.replacementBatches ?? []) : undefined,
+    varianceNote: r.category === 'ingredient' ? (r.varianceNote ?? null) : undefined,
+    replacedAt: r.category === 'ingredient' ? (r.replacedAt ?? null) : undefined,
+    replacedBy: r.category === 'ingredient' ? (r.replacedBy ?? null) : undefined,
     valuation: r.valuation,
     createdAt: r.createdAt,
   }));
