@@ -487,6 +487,7 @@ async function approvePlan(id, actor) {
         frozenRecipe: (menuDoc.ingredients || []).map((ing) => ({
           inventoryId: ing.inventoryId,
           nameInventory: ing.nameInventory,
+          unit: ing.unit, // BARU -- sudah ada di menuDoc.ingredients (buildCostBreakdown)
           quantityPerUnit: ing.quantityNeeded,
         })),
       };

@@ -87,6 +87,7 @@ function computeIngredientsDetail({ planMenu, menuDoc, checkResult }) {
     return {
       inventoryId: ing.inventoryId,
       nameInventory: ing.nameInventory,
+      unit: ing.unit, // BARU
       quantityNeeded,
       // angka ASLI dari checkAvailability, bukan approksimasi
       availableQuantity: entry?.availableQuantity ?? null,
@@ -178,6 +179,7 @@ function computeCommittedIngredientsDetail({ planMenu, committedIngredients }) {
     return {
       inventoryId: recipeItem.inventoryId,
       nameInventory: recipeItem.nameInventory,
+      unit: recipeItem.unit, // BARU
       quantityNeeded,
       quantityAvailable,
       poolShared: true,
@@ -188,7 +190,12 @@ function computeCommittedIngredientsDetail({ planMenu, committedIngredients }) {
     };
   });
 
-  const costComplete = ingredientsDetail.every((d) => d.unitCost != null);
+  // FIX -- array kosong artinya frozenRecipe belum ada (data hilang), BUKAN
+  // "semua ingredient lengkap costnya". .every() pada array kosong selalu
+  // true -- itu yang bikin costPerPortion:0 muncul kayak angka valid di
+  // respons, padahal seharusnya null + costComplete:false.
+  const costComplete =
+    ingredientsDetail.length > 0 && ingredientsDetail.every((d) => d.unitCost != null);
   const costPerPortion = costComplete
     ? ingredientsDetail.reduce((sum, d) => sum + (d.costContribution || 0), 0) /
       planMenu.quantityPlanned

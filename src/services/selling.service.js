@@ -39,6 +39,7 @@ async function getActivePlans() {
         ({
           inventoryId,
           nameInventory,
+          unit,
           quantityNeeded,
           quantityAvailable,
           poolShared,
@@ -47,6 +48,7 @@ async function getActivePlans() {
         }) => ({
           inventoryId,
           nameInventory,
+          unit,
           quantityNeeded,
           quantityAvailable,
           poolShared,
@@ -78,6 +80,7 @@ async function getActivePlans() {
           .map((b) => ({
             inventoryId: ing.inventoryId,
             nameInventory: ing.nameInventory,
+            unit: ing.unit, // BARU
             batchCode: b.batchCode,
             quantityRemaining: b.quantityRemaining,
             expired: b.expired,

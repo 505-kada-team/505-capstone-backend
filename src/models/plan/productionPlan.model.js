@@ -22,6 +22,7 @@ const frozenRecipeItemSchema = new Schema(
   {
     inventoryId: { type: Schema.Types.ObjectId, ref: 'Inventory', required: true },
     nameInventory: { type: String, required: true },
+    unit: { type: String, required: true }, // BARU
     // Snapshot dari menuDoc.ingredients[].quantityNeeded (per 1 porsi) SAAT
     // approve -- basis buat mecah committedIngredients (plan-level, pooled)
     // balik jadi breakdown per-menu yang akurat, independen dari resep Menu
@@ -66,6 +67,7 @@ const checkResultSchema = new Schema(
   {
     inventoryId: { type: Schema.Types.ObjectId, ref: 'Inventory', required: true },
     nameInventory: { type: String, required: true },
+    unit: { type: String, required: true }, // BARU
     quantityNeeded: { type: Number, required: true },
     sufficient: { type: Boolean, required: true },
     availableQuantity: { type: Number, required: true },
@@ -93,6 +95,7 @@ const committedIngredientSchema = new Schema(
   {
     inventoryId: { type: Schema.Types.ObjectId, ref: 'Inventory', required: true },
     nameInventory: { type: String, required: true },
+    unit: { type: String, required: true }, // BARU
     quantityNeeded: { type: Number, required: true },
     batches: { type: [committedBatchSchema], default: [] },
   },

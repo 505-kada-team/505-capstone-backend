@@ -380,6 +380,7 @@ async function checkAvailability(params) {
     results.push({
       inventoryId,
       nameInventory: inventory.name,
+      unit: inventory.unit, // BARU
       quantityNeeded: amountNeeded, // ⬅️ disamakan nama dgn checkResultSchema
       sufficient,
       // ⬅️ field baru — total stok aktif SAAT INI, independen dari amountNeeded.
@@ -492,6 +493,7 @@ async function deduct({ items, availableUntil, reference }) {
         perItemResult.push({
           inventoryId,
           nameInventory: inventory.name,
+          unit: inventory.unit, // BARU
           quantityNeeded: amountNeeded,
           batches: plan.map((step) => ({
             subInventoryId: step.subInventoryId,
