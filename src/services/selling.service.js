@@ -433,7 +433,16 @@ async function createSale({ planId, items, cashierName }) {
         ]);
       }
 
-      const shortfallItem = updatedPlan._pendingSaleAllocation.find((b) =>
+      // FIX: _pendingSaleAllocation bukan path yang terdaftar di
+      // productionPlanSchema -- ini cuma field sementara yang di-set lewat
+      // aggregation pipeline update di atas. Mongoose hanya membuat getter
+      // untuk path yang ADA di schema, jadi akses langsung
+      // `updatedPlan._pendingSaleAllocation` selalu balikin undefined
+      // meskipun datanya beneran ada di dokumen hasil pipeline. Harus pakai
+      // .get() supaya dibaca langsung dari data internal document.
+      const pendingSaleAllocation = updatedPlan.get('_pendingSaleAllocation') || [];
+
+      const shortfallItem = pendingSaleAllocation.find((b) =>
         b.ingredientsUsed.some((i) => i.shortfall > 0)
       );
       if (shortfallItem) {
@@ -451,7 +460,7 @@ async function createSale({ planId, items, cashierName }) {
       }
 
       const breakdownByMenuId = new Map(
-        updatedPlan._pendingSaleAllocation.map((b) => [String(b.menuId), b.ingredientsUsed])
+        pendingSaleAllocation.map((b) => [String(b.menuId), b.ingredientsUsed])
       );
       await ProductionPlan.updateOne(
         { _id: planId },
