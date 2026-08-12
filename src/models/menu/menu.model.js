@@ -36,8 +36,16 @@ const menuSchema = new Schema(
   { timestamps: true }
 );
 
-// Supports GET /api/menu search (name regex) + status filter, and
-// GET /api/menu/dropdown (status: active, sorted by name).
-menuSchema.index({ status: 1, name: 1 });
+// Unique-name guard: case-insensitive, khusus menu yang masih active.
+// Backstop untuk regex check di service layer — race condition tetap
+// ketangkep di sini dan dipetakan ke 409 lewat code 11000.
+menuSchema.index(
+  { name: 1 },
+  {
+    unique: true,
+    collation: { locale: 'en', strength: 2 },
+    partialFilterExpression: { status: 'active' },
+  }
+);
 
 module.exports = mongoose.model('Menu', menuSchema);

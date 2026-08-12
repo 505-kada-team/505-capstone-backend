@@ -148,9 +148,20 @@ async function listInventory(query) {
 }
 
 async function dropdownInventory() {
-  return Inventory.find({ status: 'active' })
-    .select('_id name itemCode category unit')
+  const items = await Inventory.find({ status: 'active' })
+    .select('_id name itemCode category unit lastCostBatch totalSubInventory')
     .sort({ name: 1 });
+
+  // totalSubInventory === 0 berarti belum pernah ada batch masuk sama
+  // sekali — beda kondisi dari "lastCostBatch memang 0 karena inputnya 0".
+  return items.map((i) => ({
+    _id: i._id,
+    name: i.name,
+    itemCode: i.itemCode,
+    category: i.category,
+    unit: i.unit,
+    lastCostBatch: i.totalSubInventory > 0 ? i.lastCostBatch : null,
+  }));
 }
 
 async function getInventoryDetail(id) {

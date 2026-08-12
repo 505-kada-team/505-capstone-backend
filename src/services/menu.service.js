@@ -2,9 +2,30 @@ const Menu = require('../models/menu/menu.model');
 const Inventory = require('../models/inventory/inventory.model');
 const ProductionPlan = require('../models/plan/productionPlan.model');
 const ApiError = require('../utils/ApiError');
+const { uploadBufferToCloudinary, destroyByUrl } = require('../utils/imageUpload');
 
 function escapeRegex(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Duplicate-name guard: case-insensitive, scoped ke menu status active.
+ * Sama pola dengan validateIngredients — regex check di service, unique
+ * index di schema jadi backstop kalau ada race condition.
+ */
+async function assertNameNotTaken(name, excludeId = null) {
+  const filter = {
+    name: { $regex: `^${escapeRegex(name.trim())}$`, $options: 'i' },
+    status: 'active',
+  };
+  if (excludeId) filter._id = { $ne: excludeId };
+
+  const existing = await Menu.findOne(filter);
+  if (existing) {
+    throw new ApiError(409, `Menu dengan nama "${name}" sudah ada`, [
+      { field: 'name', message: 'name harus unik untuk menu yang masih active' },
+    ]);
+  }
 }
 
 /**
@@ -143,20 +164,39 @@ async function flagDraftPlansStale(menuId, staleReason) {
   return affectedIds;
 }
 
-async function createMenu(data) {
+async function createMenu(data, imageFile) {
   await validateIngredients(data.ingredients);
+  await assertNameNotTaken(data.name);
 
-  const menu = await Menu.create({
-    name: data.name,
-    description: data.description || '',
-    image: data.image || null,
-    sellingPrice: data.sellingPrice,
-    status: 'active',
-    ingredients: data.ingredients.map((ing) => ({
-      inventoryId: ing.inventoryId,
-      quantityNeeded: ing.quantityNeeded,
-    })),
-  });
+  let imageUrl = data.image || null;
+  if (imageFile) {
+    const result = await uploadBufferToCloudinary(imageFile.buffer);
+    imageUrl = result.secure_url;
+  }
+
+  let menu;
+  try {
+    menu = await Menu.create({
+      name: data.name,
+      description: data.description || '',
+      image: imageUrl,
+      sellingPrice: data.sellingPrice,
+      status: 'active',
+      ingredients: data.ingredients.map((ing) => ({
+        inventoryId: ing.inventoryId,
+        quantityNeeded: ing.quantityNeeded,
+      })),
+    });
+  } catch (err) {
+    // Backstop unique index (race condition lolos dari assertNameNotTaken)
+    if (err.code === 11000) {
+      if (imageUrl && imageFile) await destroyByUrl(imageUrl); // jangan orphan
+      throw new ApiError(409, `Menu dengan nama "${data.name}" sudah ada`, [
+        { field: 'name', message: 'name harus unik untuk menu yang masih active' },
+      ]);
+    }
+    throw err;
+  }
 
   const breakdown = await buildCostBreakdown(menu.ingredients, menu.sellingPrice);
 
@@ -301,32 +341,53 @@ async function getMenusByIds(menuIds) {
   );
 }
 
-async function updateMenu(id, data) {
+async function updateMenu(id, data, imageFile) {
   const menu = await Menu.findOne({ _id: id, status: 'active' });
   if (!menu) throw new ApiError(404, 'Menu tidak ditemukan');
 
   if (data.ingredients) {
     await validateIngredients(data.ingredients);
   }
+  if (data.name !== undefined && data.name.trim() !== menu.name) {
+    await assertNameNotTaken(data.name, menu._id);
+  }
 
-  // Only ingredients/sellingPrice feed Plan calculations — name/description/
-  // image edits never trigger the stale cascade (doc §5, endpoint 4 flow).
   const touchesPlans = data.ingredients !== undefined || data.sellingPrice !== undefined;
+  const oldImage = menu.image;
+  let newImageUrl = null;
+
+  if (imageFile) {
+    const result = await uploadBufferToCloudinary(imageFile.buffer);
+    newImageUrl = result.secure_url;
+  }
 
   if (data.name !== undefined) menu.name = data.name;
   if (data.description !== undefined) menu.description = data.description;
-  if (data.image !== undefined) menu.image = data.image;
+  if (newImageUrl) menu.image = newImageUrl;
+  else if (data.image !== undefined) menu.image = data.image;
   if (data.sellingPrice !== undefined) menu.sellingPrice = data.sellingPrice;
   if (data.ingredients !== undefined) {
-    // Full replace, never a patch (RFC §6) — no diffing to decide if
-    // recipe_changed should fire, presence in payload is enough.
     menu.ingredients = data.ingredients.map((ing) => ({
       inventoryId: ing.inventoryId,
       quantityNeeded: ing.quantityNeeded,
     }));
   }
 
-  await menu.save();
+  try {
+    await menu.save();
+  } catch (err) {
+    if (err.code === 11000) {
+      if (newImageUrl) await destroyByUrl(newImageUrl);
+      throw new ApiError(409, `Menu dengan nama "${data.name}" sudah ada`, [
+        { field: 'name', message: 'name harus unik untuk menu yang masih active' },
+      ]);
+    }
+    throw err;
+  }
+
+  // Baru destroy gambar lama SETELAH save sukses — kalau save gagal,
+  // gambar lama tidak ikut hilang.
+  if (newImageUrl && oldImage) await destroyByUrl(oldImage);
 
   const affectedDraftPlans = touchesPlans
     ? await flagDraftPlansStale(menu._id, 'recipe_changed')
@@ -336,6 +397,7 @@ async function updateMenu(id, data) {
     data: {
       _id: menu._id,
       name: menu.name,
+      image: menu.image,
       sellingPrice: menu.sellingPrice,
       updatedAt: menu.updatedAt,
     },
