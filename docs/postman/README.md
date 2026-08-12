@@ -8,7 +8,9 @@ This folder contains Postman documentation and collection files for testing the 
 |------|-------------|
 | `auth.postman.md` | Auth endpoints documentation with request/response examples |
 | `inventory.postman.md` | Inventory endpoints documentation with request/response examples |
+| `dashboard.postman.md` | Dashboard endpoints documentation with request/response examples |
 | `kada-auth.postman.json` | Postman collection for Auth API (import directly) |
+| `kada-dashboard.postman.json` | Postman collection for Dashboard API (import directly) |
 | `kada-inventory.postman.json` | Postman collection for Inventory API (import directly) |
 
 ## Quick Start
