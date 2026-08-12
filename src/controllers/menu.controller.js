@@ -3,7 +3,7 @@ const ApiResponse = require('../utils/ApiResponse');
 const menuService = require('../services/menu.service');
 
 const createMenu = asyncHandler(async (req, res) => {
-  const menu = await menuService.createMenu(req.body);
+  const menu = await menuService.createMenu(req.body, req.file);
   return new ApiResponse(201, menu, 'Menu berhasil dibuat').send(res);
 });
 
@@ -21,7 +21,11 @@ const getMenuById = asyncHandler(async (req, res) => {
 });
 
 const updateMenu = asyncHandler(async (req, res) => {
-  const { data, affectedDraftPlans } = await menuService.updateMenu(req.params.id, req.body);
+  const { data, affectedDraftPlans } = await menuService.updateMenu(
+    req.params.id,
+    req.body,
+    req.file
+  );
   return new ApiResponse(200, data, 'Menu berhasil diperbarui', { affectedDraftPlans }).send(res);
 });
 
