@@ -1,6 +1,6 @@
 const asyncHandler = require('../utils/asyncHandler');
 const ApiResponse = require('../utils/ApiResponse');
-const axios = require('axios');
+const predictionService = require('../services/prediction.service');
 
 const getAssortmentPrediction = asyncHandler(async (req, res) => {
   const { duration, startDate, tags } = req.body;
@@ -12,17 +12,18 @@ const getAssortmentPrediction = asyncHandler(async (req, res) => {
     });
   }
 
-  const mlUrl = process.env.ML_SERVICE_URL || 'http://localhost:8000';
+  const userId = req.user._id || req.user.id;
 
-  const mlResponse = await axios.post(`${mlUrl}/predict-assortment`, {
-    duration: duration,
-    startDate: startDate,
-    tags: tags || []
+  const result = await predictionService.getAssortmentPrediction({
+    duration,
+    startDate,
+    tags: tags || [],
+    userId
   });
 
   return new ApiResponse(
     200, 
-    mlResponse.data, 
+    result, 
     'Successfully retrieved menu quantity recommendations from AI'
   ).send(res);
 });
