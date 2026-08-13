@@ -8,7 +8,15 @@ const inventorySchema = new Schema(
     // Short code derived from name, used as the prefix for batchCode (see utils/batchCode.js)
     itemCode: { type: String, required: true, trim: true, uppercase: true },
     category: { type: String, enum: ['ingredients', 'packaging'], required: true },
-    unit: { type: String, required: true, trim: true },
+    unit: {
+      type: String,
+      required: true,
+      trim: true,
+      enum: {
+        values: ['kg', 'gr', 'liter', 'ml', 'pcs'],
+        message: '`unit` must be one of: kg, gr, liter, ml, pcs',
+      },
+    },
     description: { type: String, default: '' },
     status: { type: String, enum: ['active', 'deleted'], default: 'active' },
 
@@ -18,6 +26,7 @@ const inventorySchema = new Schema(
     quantityTotal: { type: Number, default: 0 },
     totalSubInventory: { type: Number, default: 0 },
     lastCostBatch: { type: Number, default: 0 },
+    lastBatchInitialQuantity: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -7,6 +7,7 @@ const ProductionPlan = require('../models/plan/productionPlan.model');
 const ApiError = require('../utils/ApiError');
 const { deriveItemCode, generateBatchCode } = require('../utils/batchCode');
 const { planFefoDeduction, daysUntilExpiry } = require('../utils/fefo');
+const { toBaseUnitPrice } = require('../utils/unitConversion');
 
 // ---------------------------------------------------------------------------
 // §5.2 One shared recompute function — every endpoint that changes a batch
@@ -15,13 +16,14 @@ const { planFefoDeduction, daysUntilExpiry } = require('../utils/fefo');
 async function recomputeInventoryCache(inventoryId, session) {
   const [result] = await SubInventory.aggregate([
     { $match: { inventoryId: new mongoose.Types.ObjectId(inventoryId), status: 'active' } },
-    { $sort: { inDate: -1 } }, // newest purchase first, so $first below = lastCostBatch
+    { $sort: { inDate: -1 } },
     {
       $group: {
         _id: null,
         quantityTotal: { $sum: '$quantity' },
         totalSubInventory: { $sum: 1 },
         lastCostBatch: { $first: '$costPrices' },
+        lastBatchInitialQuantity: { $first: '$initialQuantity' }, // ganti dari lastBatchQuantity
       },
     },
   ]).session(session);
@@ -32,6 +34,7 @@ async function recomputeInventoryCache(inventoryId, session) {
       quantityTotal: result ? result.quantityTotal : 0,
       totalSubInventory: result ? result.totalSubInventory : 0,
       lastCostBatch: result ? result.lastCostBatch : 0,
+      lastBatchInitialQuantity: result ? result.lastBatchInitialQuantity : 0, // BARU
     },
     { session }
   );
@@ -149,19 +152,29 @@ async function listInventory(query) {
 
 async function dropdownInventory() {
   const items = await Inventory.find({ status: 'active' })
-    .select('_id name itemCode category unit lastCostBatch totalSubInventory')
+    .select(
+      '_id name itemCode category unit lastCostBatch lastBatchInitialQuantity totalSubInventory'
+    )
     .sort({ name: 1 });
 
-  // totalSubInventory === 0 berarti belum pernah ada batch masuk sama
-  // sekali — beda kondisi dari "lastCostBatch memang 0 karena inputnya 0".
-  return items.map((i) => ({
-    _id: i._id,
-    name: i.name,
-    itemCode: i.itemCode,
-    category: i.category,
-    unit: i.unit,
-    lastCostBatch: i.totalSubInventory > 0 ? i.lastCostBatch : null,
-  }));
+  return items.map((i) => {
+    const hasBatch = i.totalSubInventory > 0 && i.lastBatchInitialQuantity > 0;
+    const lastCostBatch = hasBatch ? i.lastCostBatch : null;
+    const pricePerUnit = hasBatch ? i.lastCostBatch / i.lastBatchInitialQuantity : null;
+    const { baseUnit, pricePerBaseUnit } = toBaseUnitPrice(pricePerUnit, i.unit);
+
+    return {
+      _id: i._id,
+      name: i.name,
+      itemCode: i.itemCode,
+      category: i.category,
+      unit: i.unit,
+      lastCostBatch, // total harga borongan batch terakhir, untuk display
+      lastCostPricePerUnit: pricePerUnit, // harga per kg/liter/pcs
+      baseUnit,
+      lastCostPricePerBaseUnit: pricePerBaseUnit, // harga per gr/ml — dipakai HPP
+    };
+  });
 }
 
 async function getInventoryDetail(id) {
@@ -263,6 +276,7 @@ async function addSubInventory(inventoryId, data) {
             inventoryId,
             batchCode,
             quantity: data.quantity,
+            initialQuantity: data.quantity, // BARU — snapshot, tidak pernah diubah lagi setelah ini
             costPrices: data.costPrices,
             inDate,
             expired,
@@ -493,7 +507,7 @@ async function deduct({ items, availableUntil, reference }) {
             nameInventory: inventory.name,
             batchCode: step.batchCode,
             quantityUsed: step.take,
-            costPriceUsed: step.costPrices,
+            costPriceUsed: step.pricePerUnit != null ? step.pricePerUnit * step.take : null, // FIX: proporsional
             reference: reference || null,
             availableUntil: availableUntil || null,
             batchSafetyStatus: step.batchSafetyStatus,
@@ -508,11 +522,11 @@ async function deduct({ items, availableUntil, reference }) {
           quantityNeeded: amountNeeded,
           batches: plan.map((step) => ({
             subInventoryId: step.subInventoryId,
-            batchCode: step.batchCode, // BARU
+            batchCode: step.batchCode,
             quantityUsed: step.take,
-            costPriceUsed: step.costPrices,
+            costPriceUsed: step.pricePerUnit != null ? step.pricePerUnit * step.take : null, // FIX: samain dengan usageRows
             batchSafetyStatus: step.batchSafetyStatus,
-            expired: step.expired, // BARU
+            expired: step.expired,
           })),
         });
       }
