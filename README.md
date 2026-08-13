@@ -1,4 +1,4 @@
-# Artisan Inventory — KADA Backend
+# Artisan Inventory KADA Backend
 
 > REST API backend untuk manajemen operasional kedai kopi/F&B: perencanaan produksi, inventori berbasis FEFO, penjualan, pelaporan kerugian, hingga rekomendasi AI.
 
@@ -42,7 +42,7 @@ Repo: [`505-kada-team/505-capstone-backend`](https://github.com/505-kada-team/50
 
 Bisnis F&B skala kedai sering kesulitan merencanakan produksi harian, melacak stok bahan baku dengan disiplin **FEFO (First-Expired-First-Out)**, dan mengevaluasi kerugian/waste secara sistematis setelah produksi berjalan.
 
-**Artisan Inventory** (nama produk: **KADA**) adalah backend API yang menjadi _source of truth_ untuk seluruh siklus tersebut — mulai dari rencana produksi, penjualan harian, sampai laporan kerugian dan dashboard — dengan validasi bisnis yang konsisten di satu tempat.
+**Artisan Inventory** (nama produk: **KADA**) adalah backend API yang menjadi _source of truth_ untuk seluruh siklus tersebut mulai dari rencana produksi, penjualan harian, sampai laporan kerugian dan dashboard dengan validasi bisnis yang konsisten di satu tempat.
 
 Repo ini adalah **backend-only**. Frontend dan ML service (untuk rekomendasi AI) berada di repo terpisah dan diakses lewat konfigurasi `ML_SERVICE_URL`.
 
@@ -50,14 +50,14 @@ Repo ini adalah **backend-only**. Frontend dan ML service (untuk rekomendasi AI)
 
 ## Key Features
 
-- **Authentication** — register, verifikasi email via OTP, login (JWT access + refresh token), forgot/reset password 3 langkah, change password, single-session enforcement lewat `tokenVersion`, endpoint `/me`.
-- **Inventory** — CRUD item inventori, sub-inventory/batch dengan tanggal kedaluwarsa, cek ketersediaan/deduct/reverse-deduct berbasis FEFO, riwayat stok masuk dan pemakaian.
-- **Menu** — CRUD menu dengan upload gambar ke Cloudinary; resep terikat ke Inventory secara _live_ selama belum ada plan yang di-approve.
-- **Production Plan** — buat dan approve rencana produksi, cek ketersediaan bahan, commit bahan saat approve, diskon per menu, stop/cancel plan. Hanya boleh ada **1 plan aktif** dalam satu waktu.
-- **Selling** — ambil plan yang sedang aktif, catat transaksi penjualan, auto-decrement stok plan, riwayat penjualan.
-- **Plan Report** — laporan kerugian/waste per bahan atau per menu, alur review oleh admin, dan penggantian stok.
-- **Dashboard** — ringkasan penjualan harian, tren per jam, breakdown per menu.
-- **AI Prediction** — rekomendasi jumlah menu/assortment dengan memanggil **ML service eksternal** lewat `ML_SERVICE_URL`.
+- **Authentication** register, verifikasi email via OTP, login (JWT access + refresh token), forgot/reset password 3 langkah, change password, single-session enforcement lewat `tokenVersion`, endpoint `/me`.
+- **Inventory** CRUD item inventori, sub-inventory/batch dengan tanggal kedaluwarsa, cek ketersediaan/deduct/reverse-deduct berbasis FEFO, riwayat stok masuk dan pemakaian.
+- **Menu** CRUD menu dengan upload gambar ke Cloudinary; resep terikat ke Inventory secara _live_ selama belum ada plan yang di-approve.
+- **Production Plan** buat dan approve rencana produksi, cek ketersediaan bahan, commit bahan saat approve, diskon per menu, stop/cancel plan. Hanya boleh ada **1 plan aktif** dalam satu waktu.
+- **Selling** ambil plan yang sedang aktif, catat transaksi penjualan, auto-decrement stok plan, riwayat penjualan.
+- **Plan Report** laporan kerugian/waste per bahan atau per menu, alur review oleh admin, dan penggantian stok.
+- **Dashboard** ringkasan penjualan harian, tren per jam, breakdown per menu.
+- **AI Prediction** rekomendasi jumlah menu/assortment dengan memanggil **ML service eksternal** lewat `ML_SERVICE_URL`.
 
 ---
 
@@ -95,9 +95,9 @@ Route → Validate (Joi) → Auth (JWT) → Controller → Service → Model (Mo
 
 Konvensi terpusat:
 
-- `asyncHandler` — wrapper controller agar error async diteruskan ke error handler.
-- `ApiError` / `ApiResponse` — bentuk error dan response yang konsisten.
-- `error.middleware.js` / `notFound.middleware.js` — penanganan error dan 404 terpusat.
+- `asyncHandler` wrapper controller agar error async diteruskan ke error handler.
+- `ApiError` / `ApiResponse` bentuk error dan response yang konsisten.
+- `error.middleware.js` / `notFound.middleware.js` penanganan error dan 404 terpusat.
 
 Semua route utama di-mount di bawah prefix `/api/v1`. Health check tersedia di `GET /api/v1/health`.
 
@@ -121,11 +121,11 @@ ProductionPlan 1 ────< PlanReport
 
 ### Domain decisions inti
 
-- **FEFO batch deduction** — deduksi stok selalu mengambil batch yang paling dekat kedaluwarsanya terlebih dahulu. Setiap perubahan tercatat di `HistorySubInventory` / `HistoryUsage`.
-- **Freeze-on-approve** — saat `ProductionPlan` di-approve, resep, nama menu, dan harga jual di-snapshot ke dalam plan, sehingga riwayat penjualan dan laporan tidak berubah meskipun resep/harga menu diedit kemudian.
-- **Single active plan constraint** — hanya satu `ProductionPlan` berstatus `active` pada satu waktu, ditegakkan lewat partial unique index.
-- **Live recipe vs snapshot history** — `Menu` menyimpan referensi `Inventory` secara live, sedangkan `HistorySubInventory`/`HistoryUsage` menyimpan snapshot agar data historis tetap terbaca meskipun entitas asli berubah.
-- **Stale flag propagation** — modul sumber tidak mengubah data milik modul lain secara destruktif, tetapi menandai draft `ProductionPlan` dengan `checkResultStale` + `staleReason` agar modul pemilik memutuskan tindakan lanjut.
+- **FEFO batch deduction** deduksi stok selalu mengambil batch yang paling dekat kedaluwarsanya terlebih dahulu. Setiap perubahan tercatat di `HistorySubInventory` / `HistoryUsage`.
+- **Freeze-on-approve** saat `ProductionPlan` di-approve, resep, nama menu, dan harga jual di-snapshot ke dalam plan, sehingga riwayat penjualan dan laporan tidak berubah meskipun resep/harga menu diedit kemudian.
+- **Single active plan constraint** hanya satu `ProductionPlan` berstatus `active` pada satu waktu, ditegakkan lewat partial unique index.
+- **Live recipe vs snapshot history** `Menu` menyimpan referensi `Inventory` secara live, sedangkan `HistorySubInventory`/`HistoryUsage` menyimpan snapshot agar data historis tetap terbaca meskipun entitas asli berubah.
+- **Stale flag propagation** modul sumber tidak mengubah data milik modul lain secara destruktif, tetapi menandai draft `ProductionPlan` dengan `checkResultStale` + `staleReason` agar modul pemilik memutuskan tindakan lanjut.
 
 ---
 
@@ -252,12 +252,12 @@ batchSafetyStatus =
 
 Karena MongoDB tidak punya FK constraint, modul Inventory menerapkan:
 
-1. **Validate-before-write** — parent harus dicek eksistensi/status sebelum menulis child.
-2. **Satu shared recompute function** — `quantityTotal`, `lastCostBatch`, `totalSubInventory` selalu dihitung ulang lewat satu fungsi bersama.
-3. **Snapshot fields** — `HistorySubInventory`/`HistoryUsage` menyimpan nama dan field penting saat transaksi.
-4. **Delete guards** — `DELETE /inventory/:id` ditolak 409 bila masih ada batch aktif berstok.
-5. **Stale-flag propagation** — arsip inventory/batch menandai draft plan terkait dengan `checkResultStale`.
-6. **Atomicity** — transaksi MongoDB dipakai untuk create batch, delete batch, deduct, dan reverse deduct.
+1. **Validate-before-write** parent harus dicek eksistensi/status sebelum menulis child.
+2. **Satu shared recompute function** `quantityTotal`, `lastCostBatch`, `totalSubInventory` selalu dihitung ulang lewat satu fungsi bersama.
+3. **Snapshot fields** `HistorySubInventory`/`HistoryUsage` menyimpan nama dan field penting saat transaksi.
+4. **Delete guards** `DELETE /inventory/:id` ditolak 409 bila masih ada batch aktif berstok.
+5. **Stale-flag propagation** arsip inventory/batch menandai draft plan terkait dengan `checkResultStale`.
+6. **Atomicity** transaksi MongoDB dipakai untuk create batch, delete batch, deduct, dan reverse deduct.
 7. **Atomic conditional update** pada deduct untuk mencegah race condition antar deduct.
 
 #### Endpoint inventory
@@ -287,9 +287,9 @@ Path relatif terhadap `/api/v1`.
 
 #### Prinsip utama
 
-- **Menu mereferensikan `Inventory`, bukan `SubInventory`** — resep adalah fakta tentang jenis bahan, bukan batch fisik tertentu.
-- **Live data, bukan snapshot** — `Menu.ingredients[]` hanya menyimpan `inventoryId` dan `quantityNeeded`. Field lain dihitung saat dibaca.
-- **Tidak ada delete guard** — arsip menu tidak diblokir karena menu tidak punya stok sendiri.
+- **Menu mereferensikan `Inventory`, bukan `SubInventory`** resep adalah fakta tentang jenis bahan, bukan batch fisik tertentu.
+- **Live data, bukan snapshot** `Menu.ingredients[]` hanya menyimpan `inventoryId` dan `quantityNeeded`. Field lain dihitung saat dibaca.
+- **Tidak ada delete guard** arsip menu tidak diblokir karena menu tidak punya stok sendiri.
 
 #### Cost & margin
 
@@ -391,7 +391,7 @@ Cost level menu reuse `Menu.currentCostEstimate`; Production Plan **tidak punya 
 
 1. Plan harus `draft`.
 2. Cek tidak ada plan lain `active`.
-3. Jika `checkResultStale: true` dengan `staleReason` `recipe_changed` / `menu_archived`, tolak 400 — wajib refresh.
+3. Jika `checkResultStale: true` dengan `staleReason` `recipe_changed` / `menu_archived`, tolak 400 wajib refresh.
 4. Jika `readyToApprove: false`, tolak 400.
 5. Defense-in-depth: validasi langsung semua `menuId` masih `active` di Menu.
 6. Mulai transaksi; panggil `deduct` untuk tiap `inventoryId` agregat.
@@ -656,7 +656,8 @@ Coverage domain lain masih menyusul.
 
 ---
 
-## Team
+## Contributor
 
 - Muhammad Daffa' Fisabilillah
 - Arianto Blawa Maran
+- Fadya Amalia Zahra
