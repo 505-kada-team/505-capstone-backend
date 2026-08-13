@@ -459,6 +459,20 @@ Urutan pengerjaan, satu modul = satu branch = satu PR:
 - Autentikasi:
   - `Authorization: Bearer <accessToken>`
 
+### Dashboard
+
+- Prefix: `/api/v1/dashboard`
+- Endpoint utama:
+  - `GET /api/v1/dashboard/plan/:planId/daily?date=YYYY-MM-DD`
+- Deskripsi:
+  - Mengembalikan ringkasan harian untuk satu plan.
+  - Response biasanya berisi agregasi revenue, performa menu, target vs aktual, dan metrik plan terkait untuk tanggal yang diminta.
+- Validasi input:
+  - `planId` harus berupa MongoDB ObjectId 24 karakter hex.
+  - `date` wajib dalam format `YYYY-MM-DD`.
+- Autentikasi:
+  - `Authorization: Bearer <accessToken>`
+
 ## Dokumentasi Per Modul
 
 Dokumentasi berikut akan terletak di `docs/<module>.md` (atau lokasi yang disepakati tim)
