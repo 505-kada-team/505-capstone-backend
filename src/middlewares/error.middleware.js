@@ -10,32 +10,27 @@ const errorHandler = (err, req, res, next) => {
   if (!(error instanceof ApiError)) {
     const statusCode = error.statusCode || 500;
     const message = error.message || 'Internal Server Error';
-    error = new ApiError(statusCode, message, { isOperational: false });
+    error = new ApiError(statusCode, message, null, false);
   }
 
   // Mongoose duplicate key error.
   if (err.code === 11000) {
-    const field = Object.keys(err.keyPattern || err.keyValue || {})[0] || 'field';
-    error = new ApiError(409, `${field} already in use`, { code: 'DUPLICATE_FIELD' });
+    const field = Object.keys(err.keyValue || {})[0];
+    error = new ApiError(409, `${field} sudah terdaftar, gunakan yang lain`);
   }
 
   // Mongoose validation error.
   if (err.name === 'ValidationError') {
     const messages = Object.values(err.errors).map((e) => e.message);
-    error = new ApiError(400, 'Validation failed', { code: 'VALIDATION_ERROR', details: messages });
-  }
-
-  // Mongoose CastError (invalid ObjectId).
-  if (err.name === 'CastError') {
-    error = new ApiError(400, 'Invalid identifier', { code: 'INVALID_ID' });
+    error = new ApiError(400, 'Validasi gagal', messages);
   }
 
   // JWT error (siap dipakai begitu modul Authentication ditambahkan).
   if (err.name === 'JsonWebTokenError') {
-    error = new ApiError(401, 'Token is invalid', { code: 'TOKEN_INVALID' });
+    error = new ApiError(401, 'Token tidak valid');
   }
   if (err.name === 'TokenExpiredError') {
-    error = new ApiError(401, 'Token has expired', { code: 'TOKEN_EXPIRED' });
+    error = new ApiError(401, 'Token sudah kedaluwarsa');
   }
 
   if (!error.isOperational || error.statusCode >= 500) {
@@ -45,14 +40,6 @@ const errorHandler = (err, req, res, next) => {
   res.status(error.statusCode || 500).json({
     success: false,
     message: error.message,
-    // FIX: previously fell back to 'INTERNAL_ERROR' for ANY error missing an
-    // explicit `code`, regardless of statusCode — so a well-formed 409/404
-    // ApiError with no `code` set (e.g. reverseDeduct's "reference not found")
-    // was mislabeled as an internal/500-class error in the response body,
-    // even though the actual HTTP status was already correct.
-    // Only unclassified 5xx errors should read as INTERNAL_ERROR; anything
-    // 4xx without an explicit code is just a generic client-facing ERROR.
-    code: error.code || ((error.statusCode || 500) >= 500 ? 'INTERNAL_ERROR' : 'ERROR'),
     details: error.details || undefined,
     // Stack trace hanya muncul di development, jangan bocor ke production.
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,

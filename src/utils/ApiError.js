@@ -9,18 +9,15 @@
 class ApiError extends Error {
   /**
    * @param {number} statusCode - HTTP status code
-   * @param {string} message - error message safe for client display
-   * @param {object} [opts] - options
-   * @param {string} [opts.code] - machine-readable error code (e.g. INVALID_CREDENTIALS)
-   * @param {any} [opts.details] - additional detail, e.g. validation error array
-   * @param {boolean} [opts.isOperational] - true for expected/throwaway errors,
-   *   false for unexpected bugs that should be logged as incidents
+   * @param {string} message - pesan error yang aman ditampilkan ke client
+   * @param {any} [details] - detail tambahan, misal array pesan validasi
+   * @param {boolean} [isOperational] - true kalau error yang diprediksi/disengaja,
+   *   false kalau error tak terduga (bug/library) yang perlu dicatat sebagai insiden
    */
-  constructor(statusCode, message, { code, details, isOperational = true } = {}) {
+  constructor(statusCode, message, details = null, isOperational = true) {
     super(message);
     this.statusCode = statusCode;
-    this.code = code || undefined;
-    this.details = details || undefined;
+    this.details = details;
     this.isOperational = isOperational;
     Error.captureStackTrace(this, this.constructor);
   }

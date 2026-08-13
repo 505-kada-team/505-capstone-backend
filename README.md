@@ -424,54 +424,7 @@ Urutan pengerjaan, satu modul = satu branch = satu PR:
 | 5 | Selling / Simulasi Kasir            | `/api/v1/selling`                 | Pencatatan penjualan, waste/leftover/shortage, snapshot harga         |
 | 6 | Report Planning                       | `/api/v1/plan-reports`              | Laporan hasil plan yang telah berjalan (final, disimpan permanen)     |
 | 7 | Dashboard                                | `/api/v1/dashboard`                   | Agregasi revenue, trend, top menu                                     |
-| 8 | Create Plan with AI                        | `/api/v1/predictions`                   | Rekomendasi plan berbasis data historis + LLM                          |
-
-## Dashboard & Prediction
-
-`Dashboard` dan `Prediction` adalah modul insight yang bekerja di atas data plan dan selling. Keduanya memakai JWT access token karena data yang dikembalikan bersifat sensitif dan hanya boleh diakses oleh user terautentikasi.
-
-### Dashboard
-
-- Prefix: `/api/v1/dashboard`
-- Endpoint utama:
-  - `GET /api/v1/dashboard/plan/:planId/daily?date=YYYY-MM-DD`
-- Deskripsi:
-  - Mengembalikan ringkasan harian untuk satu plan.
-  - Response biasanya berisi agregasi revenue, performa menu, target vs aktual, dan metrik plan terkait untuk tanggal yang diminta.
-- Validasi input:
-  - `planId` harus berupa MongoDB ObjectId 24 karakter hex.
-  - `date` wajib dalam format `YYYY-MM-DD`.
-- Autentikasi:
-  - `Authorization: Bearer <accessToken>`
-
-### Prediction
-
-- Prefix: `/api/v1/predictions`
-- Endpoint utama:
-  - `POST /api/v1/predictions/assortment`
-- Deskripsi:
-  - Menghasilkan rekomendasi assortment/plan berbasis input durasi, tanggal mulai, dan tag.
-  - Output digunakan untuk membantu front-end memilih prospek menu dan stok yang cocok selama periode plan.
-- Request body:
-  - `duration`: integer, antara `3` dan `30` hari.
-  - `startDate`: ISO date string.
-  - `tags`: array string optional.
-- Autentikasi:
-  - `Authorization: Bearer <accessToken>`
-
-### Dashboard
-
-- Prefix: `/api/v1/dashboard`
-- Endpoint utama:
-  - `GET /api/v1/dashboard/plan/:planId/daily?date=YYYY-MM-DD`
-- Deskripsi:
-  - Mengembalikan ringkasan harian untuk satu plan.
-  - Response biasanya berisi agregasi revenue, performa menu, target vs aktual, dan metrik plan terkait untuk tanggal yang diminta.
-- Validasi input:
-  - `planId` harus berupa MongoDB ObjectId 24 karakter hex.
-  - `date` wajib dalam format `YYYY-MM-DD`.
-- Autentikasi:
-  - `Authorization: Bearer <accessToken>`
+| 8 | Create Plan with AI                        | `/api/v1/forecasting`                   | Rekomendasi plan berbasis data historis + LLM                          |
 
 ## Dokumentasi Per Modul
 

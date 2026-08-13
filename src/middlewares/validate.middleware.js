@@ -22,19 +22,12 @@ const validate = (schema) => (req, res, next) => {
     if (error) {
       errors.push(...error.details.map((detail) => detail.message));
     } else {
-      if (key === 'query') {
-        Object.keys(req.query).forEach((k) => delete req.query[k]);
-        Object.assign(req.query, value);
-      } else {
-        req[key] = value;
-      }
+      req[key] = value;
     }
   });
 
   if (errors.length > 0) {
-    return next(
-      new ApiError(400, 'Validation failed', { code: 'VALIDATION_ERROR', details: errors })
-    );
+    return next(new ApiError(400, 'Validasi gagal', errors));
   }
 
   return next();
