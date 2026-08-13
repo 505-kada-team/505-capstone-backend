@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@getbrevo/brevo": "^6.0.2",
+    "axios": "^1.19.0",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.10.0",
     "compression": "^1.7.4",
@@ -32,6 +33,7 @@
     "morgan": "^1.10.0",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.3",
+    "streamfire": "^1.10.1",
     "streamifier": "^0.1.1",
     "winston": "^3.13.0"
   },
