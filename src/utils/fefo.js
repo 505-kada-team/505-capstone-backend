@@ -54,11 +54,18 @@ function planFefoDeduction(batches, amountNeeded, availableUntil) {
     if (remaining <= 0) break;
     if (batch.quantity <= 0) continue;
     const take = Math.min(batch.quantity, remaining);
+
+    // pricePerUnit dihitung dari initialQuantity (qty saat beli), BUKAN batch.quantity
+    // (sisa saat ini) — supaya harga per unit tidak ikut naik seiring stok berkurang.
+    const pricePerUnit =
+      batch.initialQuantity > 0 ? batch.costPrices / batch.initialQuantity : null;
+
     plan.push({
       subInventoryId: batch._id,
       batchCode: batch.batchCode,
       take,
-      costPrices: batch.costPrices,
+      costPrices: batch.costPrices, // tetap disimpan: total harga borongan batch, untuk referensi/histori
+      pricePerUnit, // BARU — harga per unit inventory (kg/liter/pcs) untuk batch spesifik ini
       expired: batch.expired,
       batchSafetyStatus: computeBatchSafetyStatus(batch.expired, availableUntil),
     });

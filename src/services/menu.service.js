@@ -3,6 +3,7 @@ const Inventory = require('../models/inventory/inventory.model');
 const ProductionPlan = require('../models/plan/productionPlan.model');
 const ApiError = require('../utils/ApiError');
 const { uploadBufferToCloudinary, destroyByUrl } = require('../utils/imageUpload');
+const { toBaseUnitPrice } = require('../utils/unitConversion');
 
 function escapeRegex(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -83,9 +84,13 @@ async function buildCostBreakdown(ingredients, sellingPrice) {
   const populated = await Promise.all(
     ingredients.map(async (ing) => {
       const inv = await Inventory.findById(ing.inventoryId);
-      const missingCost = !inv || inv.status === 'deleted' || inv.lastCostBatch == null;
+      const hasBatch =
+        inv &&
+        inv.status !== 'deleted' &&
+        inv.lastCostBatch != null &&
+        inv.lastBatchInitialQuantity > 0;
 
-      if (missingCost) {
+      if (!hasBatch) {
         costComplete = false;
         return {
           inventoryId: ing.inventoryId,
@@ -99,14 +104,20 @@ async function buildCostBreakdown(ingredients, sellingPrice) {
         };
       }
 
-      const currentCostPerUnit = inv.lastCostBatch;
+      // FIX: quantityNeeded SUDAH dalam unit Inventory asli (kg/liter/pcs)
+      // — dikonversi turun dari gram/ml di frontend sebelum submit
+      // (lihat lib/inventoryUnit.js). Jadi currentCostPerUnit HARUS tetap
+      // per-unit-Inventory-asli juga, TIDAK dikonversi ke base unit —
+      // kalau dikonversi, basisnya jadi tidak sepadan lagi dengan
+      // quantityNeeded (bug arah sebaliknya).
+      const currentCostPerUnit = inv.lastCostBatch / inv.lastBatchInitialQuantity;
       const subtotalCost = ing.quantityNeeded * currentCostPerUnit;
 
       return {
         inventoryId: ing.inventoryId,
         nameInventory: inv.name,
         category: inv.category,
-        unit: inv.unit,
+        unit: inv.unit, // benar apa adanya — sepadan dengan quantityNeeded & currentCostPerUnit
         inventoryStatus: inv.status,
         quantityNeeded: ing.quantityNeeded,
         currentCostPerUnit,
