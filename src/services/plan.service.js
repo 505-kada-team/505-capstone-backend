@@ -104,14 +104,15 @@ function aggregateIngredientNeeds(menuInputs, menuDocsById) {
   menuInputs.forEach(({ menuId, quantityPlanned }) => {
     const menuDoc = menuDocsById.get(String(menuId));
     (menuDoc.ingredients || []).forEach((ing) => {
-      const key = String(ing.inventoryId);
+      // ✅ TRIM di sini untuk menghindari spasi tak terlihat
+      const key = String(ing.inventoryId).trim();
       const quantityForThisMenu = ing.quantityNeeded * quantityPlanned;
       const existing = needsByInventoryId.get(key);
       if (existing) {
         existing.quantityNeeded += quantityForThisMenu;
       } else {
         needsByInventoryId.set(key, {
-          inventoryId: ing.inventoryId,
+          inventoryId: key, // gunakan key yang sudah di-trim
           nameInventory: ing.nameInventory,
           quantityNeeded: quantityForThisMenu,
         });
@@ -666,6 +667,16 @@ async function setDiscount(id, menuId, payload, actor) {
 
 async function removeDiscount(id, menuId) {
   const plan = await getPlanOrThrow(id);
+
+  // FIX: sebelumnya tidak ada guard status sama sekali — endpoint ini bisa
+  // dipanggil walau plan sudah completed/stopped/cancelled. Disamakan
+  // dengan setDiscount(): hanya boleh selagi draft atau active.
+  if (!['draft', 'active'].includes(plan.status)) {
+    throw new ApiError(400, 'Diskon hanya bisa dihapus selagi plan draft atau active', [
+      { field: 'status', message: `Status saat ini: ${plan.status}` },
+    ]);
+  }
+
   const planMenu = plan.menus.find((m) => String(m.menuId) === String(menuId));
   if (!planMenu) {
     throw new ApiError(400, 'Menu ini tidak ada di plan', [

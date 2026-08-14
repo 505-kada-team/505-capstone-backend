@@ -515,6 +515,13 @@ async function createSale({ planId, items, cashierName }) {
 
 async function getSaleHistory(query) {
   const { planId, date, cashierName } = query;
+
+  // BARU -- sebelumnya endpoint ini tidak punya pagination sama sekali,
+  // semua transaksi yang match filter langsung di-load penuh ke memory.
+  // Pola clamp sama seperti getMenus()/listPlans() di modul lain.
+  const page = Math.max(parseInt(query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
+
   const filter = {};
   if (planId) filter.planId = planId;
   if (cashierName) filter.cashierName = cashierName;
@@ -526,7 +533,34 @@ async function getSaleHistory(query) {
     filter.soldAt = { $gte: start, $lt: end };
   }
 
-  const transactions = await PlanSale.find(filter).sort({ soldAt: -1 });
+  const skip = (page - 1) * limit;
+
+  const [totalData, transactions, summaryAgg] = await Promise.all([
+    PlanSale.countDocuments(filter),
+    PlanSale.find(filter).sort({ soldAt: -1 }).skip(skip).limit(limit),
+    // FIX -- summary WAJIB dihitung atas SELURUH hasil filter, bukan cuma
+    // transaksi di halaman yang sedang ditampilkan. Query terpisah ini
+    // sengaja tidak ikut skip/limit, supaya angka ringkasan laporan tidak
+    // berubah-ubah tergantung halaman berapa yang sedang dibuka user.
+    PlanSale.aggregate([
+      { $match: filter },
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: { $multiply: ['$items.priceUsed', '$items.quantitySold'] } },
+          totalDiscountGiven: {
+            $sum: {
+              $multiply: [
+                { $subtract: ['$items.originalPrice', '$items.priceUsed'] },
+                '$items.quantitySold',
+              ],
+            },
+          },
+        },
+      },
+    ]),
+  ]);
 
   const data = transactions.map((t) => ({
     _id: t._id,
@@ -546,15 +580,17 @@ async function getSaleHistory(query) {
     transactionRevenue: t.items.reduce((sum, it) => sum + it.priceUsed * it.quantitySold, 0),
   }));
 
-  const totalTransaction = transactions.length;
-  const totalRevenue = data.reduce((sum, t) => sum + t.transactionRevenue, 0);
-  const totalDiscountGiven = transactions.reduce(
-    (sum, t) =>
-      sum + t.items.reduce((s, it) => s + it.quantitySold * (it.originalPrice - it.priceUsed), 0),
-    0
-  );
+  const summary = {
+    totalTransaction: totalData,
+    totalRevenue: summaryAgg[0]?.totalRevenue || 0,
+    totalDiscountGiven: summaryAgg[0]?.totalDiscountGiven || 0,
+  };
 
-  return { data, summary: { totalTransaction, totalRevenue, totalDiscountGiven } };
+  return {
+    data,
+    summary,
+    pagination: { totalData, totalPage: Math.ceil(totalData / limit), currentPage: page, limit },
+  };
 }
 
 module.exports = { getActivePlans, createSale, getSaleHistory };
