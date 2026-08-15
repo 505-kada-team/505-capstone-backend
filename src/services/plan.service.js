@@ -754,6 +754,7 @@ function toDetailedResponse(plan, menuDocsById) {
     const base = {
       menuId: m.menuId,
       name: isDraft ? (menuDoc ? menuDoc.name : null) : m.frozenMenuName,
+      menuStatus: isDraft ? (menuDoc ? menuDoc.status : 'not_found') : 'frozen',
       quantityPlanned: m.quantityPlanned,
       soldQuantity: m.soldQuantity,
       lossQuantity: m.lossQuantity,
