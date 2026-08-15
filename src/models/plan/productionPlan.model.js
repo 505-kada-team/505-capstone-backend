@@ -134,6 +134,7 @@ const productionPlanSchema = new Schema(
         'stock_taken',
         'batch_removed',
         'inventory_archived',
+        'inventory_added',
         'recipe_changed',
         'menu_archived',
         null,

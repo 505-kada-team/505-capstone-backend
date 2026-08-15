@@ -306,6 +306,7 @@ async function addSubInventory(inventoryId, data) {
       );
 
       await recomputeInventoryCache(inventoryId, session);
+      await propagateStale(inventoryId, null, 'inventory_added', session);
       created = batch;
     });
     return created;

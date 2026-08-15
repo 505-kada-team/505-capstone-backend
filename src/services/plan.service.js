@@ -857,6 +857,8 @@ function toDetailedResponse(plan, menuDocsById) {
         'Salah satu batch bahan yang disimulasikan sudah dihapus. Disarankan refresh check-availability.',
       inventory_archived:
         'Salah satu bahan yang dipakai draft ini sudah diarsipkan. Disarankan refresh check-availability.',
+      inventory_added:
+        'Batch baru ditambahkan ke salah satu bahan yang dipakai draft ini. Disarankan refresh check-availability.',
       recipe_changed:
         'Resep salah satu menu di plan ini berubah sejak simulasi terakhir. Refresh check-availability wajib dilakukan sebelum approve.',
       menu_archived:
