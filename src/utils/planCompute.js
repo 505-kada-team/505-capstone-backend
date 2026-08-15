@@ -163,7 +163,7 @@ function computeCommittedIngredientsDetail({ planMenu, committedIngredients }) {
     const batches = entry?.batches || [];
 
     const totalOriginalQuantity = batches.reduce((sum, b) => sum + b.quantityUsed, 0);
-    const totalOriginalCost = batches.reduce((sum, b) => sum + b.quantityUsed * b.costPriceUsed, 0);
+    const totalOriginalCost = batches.reduce((sum, b) => sum + b.costPriceUsed, 0);
     const unitCost = totalOriginalQuantity > 0 ? totalOriginalCost / totalOriginalQuantity : null;
 
     const remainingBatches = batches.filter((b) => b.quantityRemaining > 0);
