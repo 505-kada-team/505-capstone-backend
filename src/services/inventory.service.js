@@ -60,18 +60,11 @@ async function lazyExpireBatches(inventoryId, session) {
 // Plan collection once that module lands. Kept as its own function so the
 // call sites (delete inventory / delete batch) don't need to change later.
 // eslint-disable-next-line no-unused-vars
-async function propagateStale(inventoryId, subInventoryId, staleReason, session) {
+async function propagateStale(inventoryId, staleReason, session) {
   const filter = {
     status: 'draft',
     'checkResult.inventoryId': inventoryId,
   };
-
-  // batch_removed harus match subInventoryId spesifik di dalam eligible
-  // batches, bukan sekadar inventoryId — supaya draft yang FEFO-plan-nya
-  // tidak menyentuh batch yang dihapus tidak ikut ditandai stale.
-  if (staleReason === 'batch_removed' && subInventoryId) {
-    filter['checkResult.eligibleBatches.subInventoryId'] = subInventoryId;
-  }
 
   await ProductionPlan.updateMany(
     filter,
@@ -223,7 +216,7 @@ async function deleteInventory(id) {
 
       inventory.status = 'deleted';
       await inventory.save({ session });
-      await propagateStale(id, null, 'inventory_archived', session);
+      await propagateStale(id, 'inventory_archived', session);
       result = inventory;
     });
     return result;
@@ -306,7 +299,7 @@ async function addSubInventory(inventoryId, data) {
       );
 
       await recomputeInventoryCache(inventoryId, session);
-      await propagateStale(inventoryId, null, 'inventory_added', session);
+      await propagateStale(inventoryId, 'inventory_added', session);
       created = batch;
     });
     return created;
@@ -342,7 +335,7 @@ async function deleteSubInventory(id) {
       batch.status = 'deleted';
       await batch.save({ session });
       await recomputeInventoryCache(batch.inventoryId, session);
-      await propagateStale(batch.inventoryId, id, 'batch_removed', session);
+      await propagateStale(batch.inventoryId, 'batch_removed', session);
       result = batch;
     });
     return result;

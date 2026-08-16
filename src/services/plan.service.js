@@ -28,8 +28,9 @@ const {
 //   simulasi lewat `sufficient`/`shortfall`; tidak ada reservasi stok apapun
 //   sampai admin panggil endpoint approve (A6). `batches` (bukan
 //   `eligibleBatches`) adalah hasil FEFO plan dari `planFefoDeduction`,
-//   berisi `subInventoryId` per batch — inilah yang dipakai propagateStale
-//   untuk match `batch_removed`.>
+//   berisi `subInventoryId` per batch. propagateStale sekarang hanya match
+//   inventoryId (bukan subInventoryId), jadi semua draft plan yang pakai
+//   inventory itu ikut ditandai stale.>
 //   (endpoint 11, dry-run, dipanggil paralel per inventoryId teragregasi)
 //
 // inventoryService.deduct({ planId, inventoryId, quantityNeeded, availableUntil }, session)
