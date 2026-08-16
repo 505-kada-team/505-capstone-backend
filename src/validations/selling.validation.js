@@ -32,6 +32,7 @@ const createSale = {
 const getSaleHistory = {
   query: Joi.object({
     planId: objectId,
+    menuId: objectId,
     date: Joi.date().iso(),
     cashierName: Joi.string().trim(),
   }),
