@@ -514,7 +514,7 @@ async function createSale({ planId, items, cashierName }) {
 // --- B3: Riwayat penjualan (per transaksi/struk) ---------------------
 
 async function getSaleHistory(query) {
-  const { planId, date, cashierName, menuId } = query;
+  const { planId, date, cashierName, menuId, startTime, endTime } = query;
 
   // BARU -- sebelumnya endpoint ini tidak punya pagination sama sekali,
   // semua transaksi yang match filter langsung di-load penuh ke memory.
@@ -531,6 +531,16 @@ async function getSaleHistory(query) {
     const end = new Date(start);
     end.setDate(end.getDate() + 1);
     filter.soldAt = { $gte: start, $lt: end };
+  }
+  if (startTime) {
+    const s = new Date(startTime);
+    if (!filter.soldAt) filter.soldAt = {};
+    filter.soldAt.$gte = s;
+  }
+  if (endTime) {
+    const e = new Date(endTime);
+    if (!filter.soldAt) filter.soldAt = {};
+    filter.soldAt.$lte = e;
   }
   if (menuId) filter['items.menuId'] = menuId;
 

@@ -34,6 +34,8 @@ const getSaleHistory = {
     planId: objectId,
     menuId: objectId,
     date: Joi.date().iso(),
+    startTime: Joi.date().iso(),
+    endTime: Joi.date().iso(),
     cashierName: Joi.string().trim(),
   }),
 };
