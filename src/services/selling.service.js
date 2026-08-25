@@ -105,8 +105,36 @@ async function getActivePlans() {
 }
 
 // --- B2: Catat penjualan (multi-item + FEFO decrement) ---------------
+//
+// Cerita singkat sebelum baca ke bawah:
+//
+// Kita bikin "session" dulu -- anggap ini kayak buka jalur telepon
+// khusus ke database, belum ngobrolin apa-apa, cuma nyambungin dulu.
+//
+// Terus kita pakai session.withTransaction(...) dan kasih dia satu
+// "paket pekerjaan" (function di dalamnya). withTransaction ini yang
+// bakal ngurusin: "mulai kerjaan", terus kalau semua lancar dia
+// "simpen permanen", kalau ada yang salah dia "batalin semua", dan
+// khusus buat gangguan sementara (network kedip, ada yang lagi rebutan
+// data yang sama) dia bakal "coba ulang dari awal" sendiri tanpa kita
+// suruh. Makanya kamu gak bakal nemu kode manual kayak
+// startTransaction()/commitTransaction()/abortTransaction() -- itu
+// semua udah "dibungkus" di dalam withTransaction.
+//
+// Di paling luar, kita bungkus semuanya dengan try...finally (bukan
+// try...catch ya, sengaja gak ada catch). finally itu janjinya:
+// "apapun yang terjadi di dalam try -- lancar atau ada yang salah --
+// baris di finally PASTI dijalanin". Kita pakai itu buat nutup jalur
+// telepon tadi (session.endSession()), supaya jalur itu gak nyangkut
+// kebuka terus. Errornya sendiri sengaja kita biarin "lewat" ke orang
+// yang manggil fungsi ini (controller), bukan kita tangani di sini.
 
 async function createSale({ planId, items, cashierName }) {
+  // Sebelum apa-apa, kita cek dulu hal-hal yang sama sekali gak perlu
+  // nanya ke database -- cukup ngecek apa yang dikirim orangnya aja.
+  // Kalau ada yang aneh dari sini, ngapain repot-repot buka jalur
+  // telepon ke database dulu, kan? Makanya ini ditaruh sebelum sesi
+  // dibuka.
   if (!Array.isArray(items) || items.length === 0) {
     throw new ApiError(400, 'Transaksi harus punya minimal 1 item', [
       { field: 'items', message: 'items tidak boleh kosong' },
@@ -119,13 +147,39 @@ async function createSale({ planId, items, cashierName }) {
     ]);
   }
 
+  // Nah, baru di sini kita buka jalur teleponnya. Tapi ingat -- ini
+  // BARU buka jalur, belum ada obrolan transaksi apapun yang dimulai.
   const session = await mongoose.startSession();
+
   try {
+    // Variabel ini kita taruh di luar, supaya nanti hasil kerjaan yang
+    // kita simpan di dalam "paket pekerjaan" (callback withTransaction)
+    // masih bisa kita pakai/kembalikan setelah paket itu selesai.
     let response;
+
     await session.withTransaction(async () => {
+      // ======================================================================
+      // Kita sekarang ada DI DALAM percobaan transaksi. Ingat baik-baik:
+      // kalau nanti di tengah jalan ketemu "tabrakan" sama transaksi lain
+      // (dijelaskan lebih detail di bawah), SEMUA yang ada di dalam sini
+      // bakal DIULANG DARI ATAS lagi -- bukan cuma bagian yang tabrakan
+      // doang. Itu sebabnya kita ambil data plan-nya DI DALAM SINI, bukan
+      // di luar -- soalnya kalau diulang, kita mau lihat data yang paling
+      // baru, bukan data basi dari percobaan sebelumnya.
+      // ======================================================================
+
+      // Pertama-tama, ambil dulu plan-nya. Kalau gak ketemu, atau
+      // ternyata plan-nya bukan lagi berstatus "active", ya berarti
+      // memang gak bisa jualan dari plan ini -- langsung stop.
       const plan = await ProductionPlan.findOne({ _id: planId, status: 'active' }).session(session);
       if (!plan) throw new ApiError(404, 'Plan tidak ditemukan atau bukan berstatus active');
+      // Error kayak gini itu murni soal "aturan bisnis", bukan gangguan
+      // teknis -- jadi withTransaction TIDAK akan coba ulang. Dia
+      // langsung batalin semuanya dan lempar error ini apa adanya ke
+      // yang manggil createSale().
 
+      // Cek juga: sekarang udah masuk masa berlaku plan ini belum, atau
+      // jangan-jangan udah lewat.
       const now = new Date();
       if (now < plan.startDate) {
         throw new ApiError(
@@ -140,6 +194,18 @@ async function createSale({ planId, items, cashierName }) {
         ]);
       }
 
+      // Sekarang kita siapin data harga untuk tiap item yang dipesan.
+      // Untuk tiap item: cari menunya di plan, cek sisanya masih cukup
+      // gak, terus hitung harganya.
+      //
+      // PENTING dicatat: cek "sisa cukup atau enggak" di sini itu masih
+      // versi "kira-kira" -- kita cuma lihat data plan yang barusan kita
+      // baca tadi. Bisa aja sebenarnya, sepersekian detik kemudian, ada
+      // orang lain yang juga lagi beli menu yang sama dan bikin stok
+      // berubah. Cek yang BENERAN final nanti ada di stockGuardExpr,
+      // yang dijalankan langsung sama MongoDB pas nulis data -- itu
+      // baru gak bisa disela siapapun. Cek di sini fungsinya cuma buat
+      // kasih tau lebih cepat kalau memang udah jelas-jelas kurang.
       const menuMap = new Map(plan.menus.map((m) => [String(m.menuId), m]));
       const pricedItems = items.map(({ menuId, quantitySold }) => {
         const planMenu = menuMap.get(String(menuId));
@@ -161,6 +227,11 @@ async function createSale({ planId, items, cashierName }) {
           ]);
         }
 
+        // Harganya diambil pakai harga yang udah "dibekukan" sejak plan
+        // ini di-approve dulu (frozenSellingPrice) -- jadi kalau
+        // ternyata harga menu aslinya diubah-ubah admin belakangan,
+        // gak bakal ngaruh ke transaksi yang lagi berjalan di plan ini.
+        // Diskon juga sama, dicek apa lagi aktif atau enggak.
         const { effectiveSellingPrice, discountedPrice, discountStatus } = computePricing(
           planMenu,
           null,
@@ -182,7 +253,24 @@ async function createSale({ planId, items, cashierName }) {
         };
       });
 
-      // --- Stock guard (porsi menu) -- sama seperti sebelumnya ---
+      // ======================================================================
+      // Nah, bagian ini yang keliatan paling ribet -- tapi sebenarnya
+      // kita cuma lagi NYUSUN INSTRUKSI, belum ngobrol apa-apa ke
+      // database. Bayangin kita lagi nulis "resep" yang nanti bakal kita
+      // kasih ke MongoDB, dan MongoDB sendiri yang bakal "masak" resep
+      // itu -- ngitung sekaligus nyimpen hasilnya, dalam satu gerakan
+      // yang gak bisa disela siapapun. Makanya bahasanya beda dari
+      // JavaScript biasa (banyak $), soalnya ini "bahasa" MongoDB.
+      // ======================================================================
+
+      // stockGuardExpr -- ini pertanyaan sederhana sebenarnya:
+      // "Cari menu di plan.menus yang menuId-nya cocok dengan yang
+      // dipesan. Kalau ketemu, cek: apakah (quantityPlanned -
+      // soldQuantity - lossQuantity) masih >= jumlah yang mau dibeli?
+      // Kalau SEMUA item dalam transaksi ini lolos cek itu, baru boleh
+      // lanjut." Ini yang jadi "penjaga gerbang" sungguhan -- dievaluasi
+      // MongoDB sendiri pas dia lagi nulis data, jadi gak ada celah
+      // waktu buat disalip transaksi lain.
       const stockGuardExpr = {
         $and: pricedItems.map((item) => ({
           $anyElementTrue: {
@@ -210,6 +298,12 @@ async function createSale({ planId, items, cashierName }) {
         })),
       };
 
+      // menuUpdateBranches -- kalau penjagaan di atas lolos, ini
+      // instruksi buat "kalau ketemu menu yang cocok, tambahin
+      // soldQuantity-nya sebanyak yang dibeli. Terus kalau ternyata
+      // abis (sisa jadi nol), catat jam segini sebagai waktu abisnya."
+      // Menu yang gak dibeli di transaksi ini ya dibiarin aja apa
+      // adanya.
       const menuUpdateBranches = pricedItems.map((item) => ({
         case: { $eq: ['$$m.menuId', item.menuId] },
         then: {
@@ -249,7 +343,11 @@ async function createSale({ planId, items, cashierName }) {
         },
       }));
 
-      // --- FEFO decrement (bahan) -- baru ---
+      // itemsForFefo -- ini masih JavaScript biasa, belum nyentuh
+      // database. Kita cuma lagi nyiapin: "oke, buat tiap item yang
+      // dipesan, berapa total bahan mentah yang dibutuhin?" Resepnya
+      // diambil dari frozenRecipe (resep yang udah dibekukan pas
+      // approve), bukan resep menu yang sekarang, biar konsisten.
       const itemsForFefo = pricedItems.map((item) => {
         const planMenu = menuMap.get(String(item.menuId));
         return {
@@ -261,6 +359,27 @@ async function createSale({ planId, items, cashierName }) {
         };
       });
 
+      // fefoWalkOneIngredient -- ini jantungnya logika FEFO (bahan yang
+      // lebih cepat kadaluarsa, dihabiskan duluan). Ceritanya begini,
+      // untuk SATU jenis bahan:
+      //
+      //   1. Urutkan semua batch bahan ini dari yang paling cepat
+      //      kadaluarsa.
+      //   2. Jalan satu-satu dari batch paling depan:
+      //      - Ambil sebanyak mungkin dari batch ini, tapi jangan lebih
+      //        dari sisa kebutuhan kita, DAN jangan lebih dari sisa
+      //        stok batch itu sendiri (mana yang lebih kecil, itu yang
+      //        diambil).
+      //      - Kurangi kebutuhan kita sebesar yang barusan diambil.
+      //      - Kurangi juga stok batch itu sebesar yang barusan diambil.
+      //      - Catat: "dari batch ini, kita ambil sekian."
+      //   3. Lanjut ke batch berikutnya, ulangi, sampai kebutuhan
+      //      terpenuhi atau batch-batchnya abis semua.
+      //
+      // Kalau di akhir ternyata masih ada sisa kebutuhan yang belum
+      // kepenuhi (batch-batchnya udah abis semua tapi kebutuhan masih
+      // ada), itu artinya bahan fisiknya beneran kurang -- angka sisa
+      // itu yang nanti disebut "shortfall".
       const fefoWalkOneIngredient = {
         $let: {
           vars: {
@@ -299,6 +418,9 @@ async function createSale({ planId, items, cashierName }) {
                         ],
                       ],
                     },
+                    // Cuma dicatat kalau beneran ada yang kita ambil
+                    // dari batch ini -- biar gak numpuk catatan kosong
+                    // buat batch yang gak kesentuh sama sekali.
                     taken: {
                       $concatArrays: [
                         '$$value.taken',
@@ -326,6 +448,11 @@ async function createSale({ planId, items, cashierName }) {
         },
       };
 
+      // applyItemToCommittedIngredients -- satu item menu (misal Nasi
+      // Goreng) biasanya butuh lebih dari 1 jenis bahan (beras, minyak,
+      // bawang, dst). Fungsi ini yang menjalankan "cerita FEFO" di atas
+      // untuk SETIAP bahan yang dibutuhin item ini, satu-satu, sambil
+      // ngumpulin hasilnya jadi satu breakdown lengkap buat item ini.
       const applyItemToCommittedIngredients = {
         $reduce: {
           input: '$$this.ingredientsNeeded',
@@ -368,6 +495,11 @@ async function createSale({ planId, items, cashierName }) {
                             inventoryId: '$$this.inventoryId',
                             nameInventory: '$$ingredientEntry.nameInventory',
                             batches: '$$walk.taken',
+                            // Kalau angka ini lebih dari 0, artinya
+                            // walaupun porsi menunya lolos penjagaan
+                            // tadi, bahan fisiknya ternyata gak cukup --
+                            // mungkin ada yang hilang/rusak dan belum
+                            // dilaporkan.
                             shortfall: { $max: ['$$walk.remainingNeed', 0] },
                           },
                         ],
@@ -381,6 +513,14 @@ async function createSale({ planId, items, cashierName }) {
         },
       };
 
+      // fefoReduceExpr -- ini level paling luar. Kalau transaksinya
+      // beli beberapa menu sekaligus (misal 2 Nasi Goreng + 1 Es Teh),
+      // ini yang menjalankan "cerita" di atas untuk SETIAP item
+      // pesanan, satu-satu secara berurutan -- sambil terus
+      // ngumpulin sisa stok bahan yang udah ke-update, supaya item
+      // kedua ngitung sisa stok SETELAH item pertama udah "ambil
+      // jatah"-nya duluan. Ini penting biar gak ada bahan yang
+      // "dihitung dua kali" buat dua item berbeda.
       const fefoReduceExpr = {
         $reduce: {
           input: { $literal: itemsForFefo },
@@ -402,6 +542,32 @@ async function createSale({ planId, items, cashierName }) {
         },
       };
 
+      // ======================================================================
+      // Nah, ini baru beneran kita "telepon" MongoDB dan minta dia
+      // jalanin semua resep di atas -- ini WRITE PERTAMA yang beneran
+      // dikirim ke database dalam transaksi ini.
+      //
+      // MongoDB bakal cari dokumen plan-nya, cek penjagaan
+      // (stockGuardExpr), dan kalau lolos, langsung eksekusi semua
+      // "resep" update-nya -- semua dalam SATU GERAKAN yang gak bisa
+      // disela.
+      //
+      // Ada dua hal yang mungkin terjadi:
+      //
+      // Kemungkinan 1: MongoDB SEMPAT ngecek, tapi ternyata gak ada
+      // dokumen yang cocok (mungkin stoknya udah berubah, atau plan-nya
+      // udah bukan "active" lagi). Ini bukan error dari MongoDB --
+      // jawabannya cuma "gak nemu apa-apa" (null). Kita sendiri yang
+      // memutuskan ini jadi error 409 di bawah.
+      //
+      // Kemungkinan 2: MongoDB BELUM SEMPAT ngecek apa-apa, karena pas
+      // dia mau mulai nulis, ternyata dokumen yang sama lagi "dipegang"
+      // sama transaksi lain yang belum kelar. Ini baru beneran error
+      // dari MongoDB (disebut write conflict) -- dan ini jenis error
+      // "coba lagi", jadi withTransaction bakal otomatis ngulang
+      // SEMUANYA dari paling atas (dari baris findOne plan tadi), biar
+      // pas dicoba lagi, datanya udah yang paling baru.
+      // ======================================================================
       const updatedPlan = await ProductionPlan.findOneAndUpdate(
         { _id: planId, status: 'active', $expr: stockGuardExpr },
         [
@@ -425,6 +591,9 @@ async function createSale({ planId, items, cashierName }) {
       );
 
       if (!updatedPlan) {
+        // Ini kemungkinan 1 di atas tadi -- error bisnis biasa, TIDAK
+        // dicoba ulang. Semuanya langsung dibatalkan dan error ini
+        // dilempar apa adanya.
         throw new ApiError(409, 'Sisa porsi salah satu menu tidak mencukupi', [
           {
             field: 'items',
@@ -433,20 +602,29 @@ async function createSale({ planId, items, cashierName }) {
         ]);
       }
 
-      // FIX: _pendingSaleAllocation bukan path yang terdaftar di
-      // productionPlanSchema -- ini cuma field sementara yang di-set lewat
-      // aggregation pipeline update di atas. Mongoose hanya membuat getter
-      // untuk path yang ADA di schema, jadi akses langsung
-      // `updatedPlan._pendingSaleAllocation` selalu balikin undefined
-      // meskipun datanya beneran ada di dokumen hasil pipeline. Harus pakai
-      // .get() supaya dibaca langsung dari data internal document.
+      // FIX: _pendingSaleAllocation itu field "titipan sementara" yang
+      // gak terdaftar resmi di skema ProductionPlan -- makanya kalau
+      // diakses langsung (updatedPlan._pendingSaleAllocation) hasilnya
+      // selalu undefined, walau datanya beneran ada. Harus pakai .get()
+      // buat baca langsung dari data mentahnya.
       const pendingSaleAllocation = updatedPlan.get('_pendingSaleAllocation') || [];
 
+      // Sekarang kita cek: dari semua bahan yang barusan dipakai,
+      // apakah ada yang kekurangan (shortfall > 0)? Ini kejadiannya
+      // langka -- porsi menunya kelihatan cukup, tapi bahan mentahnya
+      // ternyata gak cukup secara fisik.
       const shortfallItem = pendingSaleAllocation.find((b) =>
         b.ingredientsUsed.some((i) => i.shortfall > 0)
       );
       if (shortfallItem) {
         const bad = shortfallItem.ingredientsUsed.find((i) => i.shortfall > 0);
+        // Sama kayak tadi -- ini keputusan bisnis, bukan gangguan
+        // teknis. Perhatikan: walaupun findOneAndUpdate di atas udah
+        // "kepalang" nulis data, karena kita throw di sini SEBELUM
+        // transaksinya di-commit, withTransaction bakal batalin SEMUA
+        // yang udah "dicoba" tulis tadi -- dokumen plan-nya balik lagi
+        // seperti semula, gak ada perubahan setengah-setengah yang
+        // ketinggalan.
         throw new ApiError(
           409,
           `Reservasi bahan "${bad.nameInventory}" tidak mencukupi untuk transaksi ini`,
@@ -462,6 +640,9 @@ async function createSale({ planId, items, cashierName }) {
       const breakdownByMenuId = new Map(
         pendingSaleAllocation.map((b) => [String(b.menuId), b.ingredientsUsed])
       );
+
+      // WRITE KEDUA -- bersih-bersih, buang field titipan sementara
+      // tadi biar gak nyangkut permanen di dokumen plan-nya.
       await ProductionPlan.updateOne(
         { _id: planId },
         { $unset: { _pendingSaleAllocation: '' } },
@@ -473,6 +654,10 @@ async function createSale({ planId, items, cashierName }) {
         ingredientsUsed: breakdownByMenuId.get(String(item.menuId)) || [],
       }));
 
+      // WRITE KETIGA -- ini baru catat struknya, di koleksi yang beda
+      // (PlanSale, bukan ProductionPlan). Tetap kita kasih { session }
+      // yang sama, supaya kalau baris ini gagal, dua write sebelumnya
+      // ikut dibatalkan juga -- bukan cuma yang ini doang.
       const [transaction] = await PlanSale.create(
         [{ planId, cashierName, soldAt: now, items: finalPricedItems }],
         { session }
@@ -480,6 +665,10 @@ async function createSale({ planId, items, cashierName }) {
 
       const updatedMenuMap = new Map(updatedPlan.menus.map((m) => [String(m.menuId), m]));
 
+      // Susun jawaban yang bakal dibalikin ke pemanggil. Ini murni
+      // JavaScript, gak nyentuh database lagi. Kita simpen ke variabel
+      // `response` yang tadi kita siapin di luar, biar masih kepake
+      // setelah "paket pekerjaan" ini kelar.
       response = {
         _id: transaction._id,
         planId: transaction.planId,
@@ -504,9 +693,26 @@ async function createSale({ planId, items, cashierName }) {
           0
         ),
       };
+
+      // Sampai sini tanpa ada yang "throw", artinya paket pekerjaan
+      // kita selesai dengan mulus. withTransaction bakal nyimpen
+      // semuanya secara permanen (commit) -- ketiga write di atas jadi
+      // kelihatan ke luar secara bersamaan, seolah terjadi dalam satu
+      // kedipan mata. Kalaupun proses nyimpen ini sendiri gagal karena
+      // gangguan (misal koneksi putus pas lagi nyimpen), withTransaction
+      // bakal coba ulang lagi dari paling atas, sama kayak kasus
+      // tabrakan data tadi.
     });
+
     return response;
   } finally {
+    // Baris ini dijamin selalu jalan, apapun yang terjadi di atas --
+    // baik semuanya lancar, baik ada error bisnis yang dilempar setelah
+    // semua percobaan ulang habis, atau error lain yang gak terduga.
+    // Ini murni soal nutup jalur telepon yang kita buka di awal tadi,
+    // biar gak nyangkut kebuka terus. Errornya sendiri kita biarin
+    // "lewat" ke yang manggil createSale(), supaya bisa dibalas sebagai
+    // pesan error yang sesuai ke pengguna.
     session.endSession();
   }
 }
